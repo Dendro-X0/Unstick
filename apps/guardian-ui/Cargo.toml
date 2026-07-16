@@ -1,0 +1,23 @@
+[package]
+name = "guardian-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Polished desktop client for Unstick"
+
+[[bin]]
+name = "guardian-ui"
+path = "src/main.rs"
+
+[dependencies]
+guardian-core = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+eframe = { version = "0.31", default-features = true, features = ["default_fonts", "glow"] }
+egui = "0.31"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
+raw-window-handle = "0.6"

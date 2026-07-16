@@ -1,0 +1,23 @@
+[package]
+name = "guardian-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "guardian-service"
+path = "src/main.rs"
+
+[dependencies]
+guardian-core = { workspace = true }
+guardian-win = { workspace = true }
+guardian-detect = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+dirs = { workspace = true }
+chrono = { workspace = true }

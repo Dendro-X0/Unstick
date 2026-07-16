@@ -1,0 +1,11 @@
+[workspace]
+
+[package]
+name = "fake-miner"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "fake-miner"
+path = "main.rs"

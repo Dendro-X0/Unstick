@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test-and-build:
+    name: test + release build
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Unit tests (core + detect)
+        run: cargo test -p guardian-core -p guardian-detect
+
+      - name: Release build (service + ui + tray)
+        run: cargo build --release -p guardian-service -p guardian-ui -p guardian-tray
+
+      - name: Build L4 fake-miner fixture
+        run: cargo build --release --manifest-path fixtures/fake_miner/Cargo.toml
+
+      - name: Package portable dist
+        shell: pwsh
+        run: |
+          ./scripts/Package-Portable.ps1 -SkipBuild
+          Get-ChildItem dist | Format-Table Name, Length
