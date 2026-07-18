@@ -40,6 +40,17 @@ pwsh -File Uninstall-Autostart.ps1 -StopProcesses -RemoveData
 
 The UI is **on demand** — it does not need to stay open for protection to work once the service is running.
 
+## Updating (portable)
+
+1. Download the latest `Unstick-*-windows-x64.zip` from the GitHub Release marked **Latest**.
+2. Close the UI and stop `guardian-service` (Task Manager, or run `Uninstall-Autostart.ps1` without `-RemoveData`).
+3. Extract the zip **over** your existing install folder (replace the `.exe` files).
+4. Keep `%LOCALAPPDATA%\Unstick\` — that is your config, logs, and status (do not delete it to update).
+5. Start `guardian-service.exe`, then `guardian-ui.exe` (or `Install-Autostart.ps1 -StartNow`).
+6. Confirm the version chip in the UI matches the release tag.
+
+There is no in-app auto-updater yet. Public builds should be Authenticode-signed when a signing cert is available; unsigned zips are for private beta only.
+
 ## Safe disk usage
 
 On the **Guard** tab:

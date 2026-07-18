@@ -298,7 +298,20 @@ fn need_cmdline(name: &str, cpu_percent: f32, disk_bps: u64) -> bool {
 
 /// Exe path for whitelist / suspicious_path; skip for cold quiet processes.
 fn need_exe_path(name: &str, cpu_percent: f32, disk_bps: u64) -> bool {
-    need_cmdline(name, cpu_percent, disk_bps) || cpu_percent >= 8.0
+    if need_cmdline(name, cpu_percent, disk_bps) || cpu_percent >= 8.0 {
+        return true;
+    }
+    // Always resolve path for well-known protected/IDE names so path_substr
+    // protection still works when CPU is idle.
+    const ALWAYS_PATH: &[&str] = &[
+        "cursor.exe",
+        "code.exe",
+        "code - insiders.exe",
+        "devenv.exe",
+        "explorer.exe",
+    ];
+    let lower = name.to_lowercase();
+    ALWAYS_PATH.iter().any(|n| lower == *n)
 }
 
 #[cfg(test)]

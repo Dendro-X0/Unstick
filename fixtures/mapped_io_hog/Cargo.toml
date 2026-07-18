@@ -1,0 +1,11 @@
+[workspace]
+
+[package]
+name = "mapped-io-hog"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "mapped-io-hog"
+path = "main.rs"

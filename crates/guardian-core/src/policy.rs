@@ -64,6 +64,15 @@ impl ProtectedSet {
             "msedgewebview2.exe",
             "firefox.exe",
             "brave.exe",
+            // IDEs — must match by name when path is gated (v0.1.2 self-overhead).
+            "cursor.exe",
+            "code.exe",
+            "code - insiders.exe",
+            "devenv.exe",
+            "idea64.exe",
+            "pycharm64.exe",
+            "webstorm64.exe",
+            "rider64.exe",
             SERVICE_BIN,
             TRAY_BIN,
             "guardian-service.exe",
@@ -495,6 +504,50 @@ mod tests {
         assert!(plan.actions.iter().any(|a| a.pid == 100));
         assert!(plan.boost_foreground);
         assert!(plan.actions.iter().all(|a| a.level == ThrottleLevel::BelowNormal));
+    }
+
+    #[test]
+    fn cursor_protected_by_name_without_path() {
+        let cfg = GuardianConfig::default();
+        let engine = PolicyEngine::new(&cfg, 1);
+        let sample = sample_with(vec![
+            ProcessSample {
+                pid: 7,
+                parent_pid: 1,
+                name: "Cursor.exe".into(),
+                path: None, // v0.1.2 path gate may omit path when idle
+                cpu_percent: 2.0,
+                memory_bytes: 2_000_000_000,
+                disk_read_bytes_per_sec: 0,
+                disk_write_bytes_per_sec: 0,
+                cmd_line: None,
+            },
+            ProcessSample {
+                pid: 8,
+                parent_pid: 1,
+                name: "memhog.exe".into(),
+                path: Some(r"C:\temp\memhog.exe".into()),
+                cpu_percent: 1.0,
+                memory_bytes: 1_500_000_000,
+                disk_read_bytes_per_sec: 0,
+                disk_write_bytes_per_sec: 0,
+                cmd_line: None,
+            },
+        ]);
+        let plan = engine.plan(
+            PressureBand::Warn,
+            &sample,
+            None,
+            DiskLockMode::Off,
+            MemLockMode::Soft,
+            0,
+            ThermalLevel::Nominal,
+        );
+        assert!(
+            plan.actions.iter().all(|a| a.pid != 7),
+            "Cursor must not receive mem_lock without path"
+        );
+        assert!(plan.actions.iter().any(|a| a.pid == 8 && a.apply_mem_lock));
     }
 
     #[test]

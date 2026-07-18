@@ -59,9 +59,9 @@ Promote **Mem Lock** and packaging maturity; start cross-platform apply surface 
 
 | # | Gate | Notes |
 |---|------|-------|
-| V2-1 | Mem Lock L4 false-positive (mapped I/O / IDE) — no Hard latch | Complements existing L3 probe |
-| V2-2 | Installer path (MSI or MSIX) **or** signed portable + documented update story | Pick one primary |
-| V2-3 | Code signing required for public download | Non-negotiable for “public” |
+| V2-1 | Mem Lock L4 false-positive (mapped I/O / IDE) — no Hard latch | **PASS** 2026-07-17 — [mem-lock-l4-evidence.md](../specs/backend/mem-lock-l4-evidence.md) |
+| V2-2 | Installer path (MSI or MSIX) **or** signed portable + documented update story | Design locked: portable zip — [v0.2-packaging-design.md](../specs/backend/v0.2-packaging-design.md) |
+| V2-3 | Code signing required for public download | Non-negotiable for “public” (cert pending) |
 | V2-4 | Release notes + USER-GUIDE Mem Lock section validated on soak | Already drafted |
 | V2-5 | Optional: Darwin `guardian-mac` real QoS/App Nap apply behind `supported()` | Stubs exist |
 
@@ -109,8 +109,8 @@ Promote **Mem Lock** and packaging maturity; start cross-platform apply surface 
 
 **Before `v0.2.0`:**
 
-- [ ] Mem Lock L4 FP signed  
-- [ ] Installer or signed update path  
+- [x] Mem Lock L4 FP signed ([mem-lock-l4-evidence.md](../specs/backend/mem-lock-l4-evidence.md))  
+- [ ] Installer or signed update path ([v0.2-packaging-design.md](../specs/backend/v0.2-packaging-design.md) locked: portable zip)  
 - [ ] Code signing for public assets  
 - [ ] Optional Darwin QoS apply smoke  
 - [ ] Tag `v0.2.0`

@@ -179,7 +179,7 @@ Update `docs/frontend-spec.md` in the UI slice, not this design pass.
 | AC1–AC4, AC6 | L1 | `cargo test -p guardian-core` (mem_lock streak + policy tests) — **Done** |
 | Executor flags | L2 | `cargo check -p guardian-win` / service |
 | AC5 + UX | L3 | `powershell -File scripts/Verify-MemLock-L3.ps1` → [`mem-lock-l3-evidence.md`](mem-lock-l3-evidence.md) — **PASS** (2026-07-17) |
-| False positive | L4 | Coding session with large mapped I/O (git/IDE) — no Hard Mem Lock |
+| False positive | L4 | `Verify-MemLock-L4.ps1` — [mem-lock-l4-evidence.md](mem-lock-l4-evidence.md) — **PASS** (2026-07-17) |
 
 ## Implementation slices
 
