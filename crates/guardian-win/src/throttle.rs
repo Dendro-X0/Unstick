@@ -24,10 +24,13 @@ use windows::Win32::System::ProcessStatus::{
 };
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
-    OpenProcess, SetPriorityClass, SetProcessPriorityBoost, SetProcessWorkingSetSize,
-    ABOVE_NORMAL_PRIORITY_CLASS, BELOW_NORMAL_PRIORITY_CLASS, IDLE_PRIORITY_CLASS,
-    NORMAL_PRIORITY_CLASS, PROCESS_DUP_HANDLE, PROCESS_QUERY_INFORMATION, PROCESS_SET_INFORMATION,
-    PROCESS_SET_QUOTA, PROCESS_SUSPEND_RESUME, PROCESS_TERMINATE,
+    OpenProcess, SetPriorityClass, SetProcessInformation, SetProcessPriorityBoost,
+    SetProcessWorkingSetSize, ABOVE_NORMAL_PRIORITY_CLASS, BELOW_NORMAL_PRIORITY_CLASS,
+    IDLE_PRIORITY_CLASS, MEMORY_PRIORITY_INFORMATION, MEMORY_PRIORITY_LOW, MEMORY_PRIORITY_NORMAL,
+    NORMAL_PRIORITY_CLASS, PROCESS_DUP_HANDLE, PROCESS_POWER_THROTTLING_STATE,
+    PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+    PROCESS_QUERY_INFORMATION, PROCESS_SET_INFORMATION, PROCESS_SET_QUOTA, PROCESS_SUSPEND_RESUME,
+    PROCESS_TERMINATE, ProcessMemoryPriority, ProcessPowerThrottling,
 };
 
 #[derive(Debug, Clone)]
@@ -395,6 +398,13 @@ impl ThrottleExecutor {
             SetPriorityClass(handle, class)?;
             let _ = SetProcessPriorityBoost(handle, true);
 
+            if action.apply_ecoqos {
+                set_ecoqos(handle, true);
+            }
+            if action.apply_mem_priority_low {
+                set_memory_priority(handle, true);
+            }
+
             if action.apply_disk_lock {
                 self.set_io_priority(handle, 0);
             } else if matches!(
@@ -404,17 +414,18 @@ impl ThrottleExecutor {
                 self.set_io_priority(handle, 1);
             }
 
+            // EmptyWorkingSet: Disk Lock always; Mem Soft keeps L3 trim; Mem Hard too.
             if action.apply_disk_lock || action.apply_mem_lock {
                 let _ = EmptyWorkingSet(handle);
             }
 
+            // Hard Mem Lock WS shrink only on Idle/Suspend ladder (Mem Hard → Background/Idle).
             if action.apply_mem_lock
                 && matches!(
                     action.level,
                     ThrottleLevel::Idle | ThrottleLevel::Suspend
                 )
             {
-                // Hard Mem Lock: gentle max WS shrink (~60% of current, floor 32 MiB).
                 let mut pmc = PROCESS_MEMORY_COUNTERS::default();
                 if GetProcessMemoryInfo(
                     handle,
@@ -427,8 +438,6 @@ impl ThrottleExecutor {
                     let max = ((pmc.WorkingSetSize as f64) * 0.6).max(floor as f64) as usize;
                     let _ = SetProcessWorkingSetSize(handle, usize::MAX, max);
                 }
-            } else if action.apply_disk_lock {
-                // disk-only path already emptied WS above
             }
 
             if action.apply_job_cap {
@@ -478,6 +487,8 @@ impl ThrottleExecutor {
             }
             SetPriorityClass(handle, NORMAL_PRIORITY_CLASS)?;
             self.set_io_priority(handle, 2);
+            set_ecoqos(handle, false);
+            set_memory_priority(handle, false);
             let _ = CloseHandle(handle);
         }
         Ok(())
@@ -539,6 +550,8 @@ impl ThrottleExecutor {
                 OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_INFORMATION, false, pid)?;
             SetPriorityClass(handle, NORMAL_PRIORITY_CLASS)?;
             self.set_io_priority(handle, 2);
+            set_ecoqos(handle, false);
+            set_memory_priority(handle, false);
             let _ = CloseHandle(handle);
             if let Some(h) = self.jobs.remove(&pid) {
                 let _ = CloseHandle(HANDLE(h as *mut _));
@@ -563,6 +576,46 @@ pub fn elevation_likely(err: &str) -> bool {
         || e.contains("os error 5")
         || e.contains("(os error 5)")
         || e.contains("privilege")
+}
+
+#[cfg(windows)]
+fn set_ecoqos(handle: HANDLE, enable: bool) {
+    let mut state = PROCESS_POWER_THROTTLING_STATE {
+        Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+        StateMask: if enable {
+            PROCESS_POWER_THROTTLING_EXECUTION_SPEED
+        } else {
+            0
+        },
+    };
+    unsafe {
+        let _ = SetProcessInformation(
+            handle,
+            ProcessPowerThrottling,
+            &mut state as *mut _ as *const _,
+            std::mem::size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+        );
+    }
+}
+
+#[cfg(windows)]
+fn set_memory_priority(handle: HANDLE, low: bool) {
+    let mut info = MEMORY_PRIORITY_INFORMATION {
+        MemoryPriority: if low {
+            MEMORY_PRIORITY_LOW
+        } else {
+            MEMORY_PRIORITY_NORMAL
+        },
+    };
+    unsafe {
+        let _ = SetProcessInformation(
+            handle,
+            ProcessMemoryPriority,
+            &mut info as *mut _ as *const _,
+            std::mem::size_of::<MEMORY_PRIORITY_INFORMATION>() as u32,
+        );
+    }
 }
 
 #[cfg(windows)]

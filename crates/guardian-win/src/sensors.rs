@@ -15,6 +15,9 @@ pub struct WinSensor {
     prev_cpu_times: HashMap<u32, Instant>,
     last_pages: Option<(u64, Instant)>,
     prev_agg_io: Option<(u64, Instant)>,
+    /// Cached process list for Normal-band light ticks (v0.3 self-overhead).
+    cached_processes: Vec<ProcessSample>,
+    proc_tick: u32,
     #[cfg(windows)]
     pdh: Option<PdhDiskCounters>,
     #[cfg(windows)]
@@ -69,6 +72,8 @@ impl WinSensor {
             prev_cpu_times: HashMap::new(),
             last_pages: None,
             prev_agg_io: None,
+            cached_processes: Vec::new(),
+            proc_tick: 0,
             #[cfg(windows)]
             pdh,
             #[cfg(windows)]
@@ -78,10 +83,20 @@ impl WinSensor {
         }
     }
 
+    /// `busy` = Warn/Throttle/Emergency or Disk/Mem Lock active — always full process refresh.
+    /// On Normal idle, full process enum every other tick (v0.3 self-overhead).
     pub fn sample(&mut self) -> SystemSample {
+        self.sample_ex(true)
+    }
+
+    pub fn sample_ex(&mut self, busy: bool) -> SystemSample {
         self.sys.refresh_cpu_all();
         self.sys.refresh_memory();
-        self.sys.refresh_processes(ProcessesToUpdate::All, true);
+        let full_procs = busy || self.proc_tick % 2 == 0 || self.cached_processes.is_empty();
+        self.proc_tick = self.proc_tick.wrapping_add(1);
+        if full_procs {
+            self.sys.refresh_processes(ProcessesToUpdate::All, true);
+        }
         self.disks.refresh(true);
 
         let cpu_percent = self.sys.global_cpu_usage();
@@ -101,74 +116,82 @@ impl WinSensor {
         let mut processes = Vec::new();
         let mut agg_io = 0u64;
 
-        for (pid, proc) in self.sys.processes() {
-            let pid_u = pid.as_u32();
-            let name = proc.name().to_string_lossy().to_string();
-            let cpu_percent = proc.cpu_usage();
-            let memory_bytes = proc.memory();
-            let parent_pid = proc.parent().map(|p| p.as_u32()).unwrap_or(0);
+        if full_procs {
+            for (pid, proc) in self.sys.processes() {
+                let pid_u = pid.as_u32();
+                let name = proc.name().to_string_lossy().to_string();
+                let cpu_percent = proc.cpu_usage();
+                let memory_bytes = proc.memory();
+                let parent_pid = proc.parent().map(|p| p.as_u32()).unwrap_or(0);
 
-            let disk_total = proc.disk_usage();
-            let read_total = disk_total.read_bytes;
-            let write_total = disk_total.written_bytes;
-            let (rps, wps) = if let Some((pr, pw, t0)) = self.prev_proc_io.get(&pid_u) {
-                let dt = now.duration_since(*t0).as_secs_f64().max(0.001);
-                let rps = ((read_total.saturating_sub(*pr)) as f64 / dt) as u64;
-                let wps = ((write_total.saturating_sub(*pw)) as f64 / dt) as u64;
-                (rps, wps)
-            } else {
-                (0, 0)
-            };
-            self.prev_proc_io
-                .insert(pid_u, (read_total, write_total, now));
-            agg_io = agg_io.saturating_add(rps.saturating_add(wps));
-
-            let disk_bps = rps.saturating_add(wps);
-            // Path only when detect/policy may need it (hot, script host, miner-ish, or warm CPU).
-            let path = if need_exe_path(&name, cpu_percent, disk_bps) {
-                proc.exe().map(|p| p.to_string_lossy().to_string())
-            } else {
-                None
-            };
-            // v0.1.2: skip expensive cmd() for quiet processes; detect still
-            // sees cmdline for script hosts / hot / miner-ish names.
-            let cmd_line = if need_cmdline(&name, cpu_percent, disk_bps) {
-                let args: Vec<String> = proc
-                    .cmd()
-                    .iter()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .collect();
-                if args.is_empty() {
-                    None
+                let disk_total = proc.disk_usage();
+                let read_total = disk_total.read_bytes;
+                let write_total = disk_total.written_bytes;
+                let (rps, wps) = if let Some((pr, pw, t0)) = self.prev_proc_io.get(&pid_u) {
+                    let dt = now.duration_since(*t0).as_secs_f64().max(0.001);
+                    let rps = ((read_total.saturating_sub(*pr)) as f64 / dt) as u64;
+                    let wps = ((write_total.saturating_sub(*pw)) as f64 / dt) as u64;
+                    (rps, wps)
                 } else {
-                    Some(args.join(" "))
-                }
-            } else {
-                None
-            };
+                    (0, 0)
+                };
+                self.prev_proc_io
+                    .insert(pid_u, (read_total, write_total, now));
+                agg_io = agg_io.saturating_add(rps.saturating_add(wps));
 
-            processes.push(ProcessSample {
-                pid: pid_u,
-                parent_pid,
-                name,
-                path,
-                cpu_percent,
-                memory_bytes,
-                disk_read_bytes_per_sec: rps,
-                disk_write_bytes_per_sec: wps,
-                cmd_line,
+                let disk_bps = rps.saturating_add(wps);
+                let path = if need_exe_path(&name, cpu_percent, disk_bps) {
+                    proc.exe().map(|p| p.to_string_lossy().to_string())
+                } else {
+                    None
+                };
+                let cmd_line = if need_cmdline(&name, cpu_percent, disk_bps) {
+                    let args: Vec<String> = proc
+                        .cmd()
+                        .iter()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .collect();
+                    if args.is_empty() {
+                        None
+                    } else {
+                        Some(args.join(" "))
+                    }
+                } else {
+                    None
+                };
+
+                processes.push(ProcessSample {
+                    pid: pid_u,
+                    parent_pid,
+                    name,
+                    path,
+                    cpu_percent,
+                    memory_bytes,
+                    disk_read_bytes_per_sec: rps,
+                    disk_write_bytes_per_sec: wps,
+                    cmd_line,
+                });
+            }
+
+            let live: std::collections::HashSet<u32> = processes.iter().map(|p| p.pid).collect();
+            self.prev_proc_io.retain(|k, _| live.contains(k));
+            self.prev_cpu_times.retain(|k, _| live.contains(k));
+
+            processes.sort_by(|a, b| {
+                b.cpu_percent
+                    .partial_cmp(&a.cpu_percent)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
+            self.cached_processes = processes.clone();
+        } else {
+            processes = self.cached_processes.clone();
+            for p in &processes {
+                agg_io = agg_io.saturating_add(
+                    p.disk_read_bytes_per_sec
+                        .saturating_add(p.disk_write_bytes_per_sec),
+                );
+            }
         }
-
-        let live: std::collections::HashSet<u32> = processes.iter().map(|p| p.pid).collect();
-        self.prev_proc_io.retain(|k, _| live.contains(k));
-        self.prev_cpu_times.retain(|k, _| live.contains(k));
-
-        processes.sort_by(|a, b| {
-            b.cpu_percent
-                .partial_cmp(&a.cpu_percent)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
 
         let (est_busy, est_queue) =
             estimate_disk(&self.disks, &self.sys, agg_io, &mut self.prev_agg_io, now);

@@ -1,13 +1,20 @@
-# Unstick — User Guide (v0.2)
+# Unstick — User Guide (v0.3)
 
 ## What it does
 
 Keeps your Windows desktop responsive on low-end hardware by:
 
-- Soft-throttling heavy background work under CPU / RAM / disk pressure
+- Soft-throttling heavy background work with **EcoQoS / Efficiency Mode** (Microsoft’s power-efficient QoS) under CPU / RAM / disk pressure
+- Lowering **memory priority** on Mem Lock Soft so Windows trims cold pages first
 - **Disk Lock** when the OS drive Active Time hits your safe thresholds
-- **Critical Guard** — temporarily pausing top resource hogs (then auto-resuming)
+- **Critical Guard** — Soft only by default; optional last-resort pause of top hogs
 - Optional abuse / miner-style heuristics (not antivirus)
+
+## What it does **not** do
+
+- Clear standby / SysMain cache (“RAM cleaner” style) — that hurts more than it helps
+- Fix high **DPC/ISR** stutter from bad drivers — Unstick only warns; use WPR/WPA (see below)
+- Replace antivirus or Task Manager
 
 ## Quick start
 
@@ -71,11 +78,33 @@ On the **Guard** tab under Controls:
 
 Presets: `15 / 8` or earlier `20 / 10`. Mem Lock does **not** clear the standby cache.
 
-Mem Lock **Hard** only latches when available/commit thresholds are met **and** paging evidence is present (quiet IDE/git mapped I/O should not Hard-latch). SoftOnly never Suspends from Mem Lock.
+Mem Lock **Hard** only latches when available/commit thresholds are met **and** paging evidence is present (quiet IDE/git mapped I/O should not Hard-latch). SoftOnly never Suspends from Mem Lock. Soft prefers **memory priority** + EcoQoS before Hard working-set shrink.
 
 ### Event log
 
 On the **Monitor** tab, the **Event log** shows recent throttle / suspend / resume / info lines from this session (and `events.jsonl` after a service restart).
+
+### DPC / ISR warnings
+
+If Guard shows **DPC/ISR · elevated/high**, stutter is likely from a **driver**, not an app Unstick can throttle. Capture a trace:
+
+```powershell
+wpr -start GeneralProfile -filemode
+# reproduce the hitch for ~30–60s
+wpr -stop $env:TEMP\unstick-dpc.etl
+```
+
+Open the `.etl` in **Windows Performance Analyzer** → add **DPC/ISR** by module; update or roll back the offending `.sys` (GPU, network, audio, chipset).
+
+## Limits / honesty
+
+Unstick is a **user-mode** Guard. It cannot:
+
+- Cure kernel DPC/ISR latency (drivers) — it only advises and points you at WPR/WPA
+- Guarantee zero hitching under Extreme memory pressure
+- Replace Task Manager, Resource Monitor, or antivirus
+
+Soft remediation uses **EcoQoS** and **memory priority** (Microsoft Efficiency Mode style) before Hard working-set shrink or Suspend.
 
 ## Whitelist
 

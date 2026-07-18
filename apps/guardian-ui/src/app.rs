@@ -510,11 +510,12 @@ impl UnstickApp {
                             .map(|s| s.dpc_time_percent.max(s.interrupt_time_percent) >= 20.0)
                             .unwrap_or(false)
                         {
-                            "DPC/ISR · high"
+                            "DPC/ISR · high (drivers)"
                         } else {
-                            "DPC/ISR · elevated"
+                            "DPC/ISR · elevated (drivers)"
                         };
-                        widgets::status_chip(ui, label, theme::AMBER);
+                        widgets::status_chip(ui, label, theme::AMBER)
+                            .on_hover_text(adv.as_str());
                     });
                 }
             }

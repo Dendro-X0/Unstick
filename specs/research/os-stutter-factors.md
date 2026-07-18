@@ -78,6 +78,9 @@ WWDC Instruments: main-thread work &gt; ~100ms → hang (busy vs blocked). Compl
 | P1 | Abstract pressure as **stall fractions** (PSI-shaped) | Portable model; Linux-ready | **Done** — `StallFractions` + `stall_*` status |
 | P2 | Thermal / power axis | Throttle ≠ offender CPU | **Done** — cooling/mhz/battery + Suspend suppress |
 | P2 | macOS QoS + App Nap ladder | Official control plane | **Done** — portable `plan_qos` + `guardian-mac` stubs |
+| P3 | EcoQoS / Efficiency Mode apply | Soft remediation matches Task Manager Efficiency Mode | **Done** (v0.3) — `ecoqos-efficiency-design.md` |
+| P3 | ProcessMemoryPriority before Hard WS | Avoid needless pagefile dumps | **Done** (v0.3) |
+| P3 | Normal-band lighter process sample | Self-overhead | **Done** (v0.3) — every-other-tick full enum |
 
 ## Out of scope for user-mode Guard
 

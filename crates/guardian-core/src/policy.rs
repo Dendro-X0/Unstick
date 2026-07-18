@@ -17,6 +17,10 @@ pub struct PlannedAction {
     pub apply_disk_lock: bool,
     /// Working-set trim ladder (Mem Lock soft/hard).
     pub apply_mem_lock: bool,
+    /// Microsoft EcoQoS / Efficiency Mode execution-speed throttle.
+    pub apply_ecoqos: bool,
+    /// ProcessMemoryPriority LOW — prefer before Hard WS shrink.
+    pub apply_mem_priority_low: bool,
     pub reason: String,
 }
 
@@ -316,8 +320,35 @@ impl PolicyEngine {
         if band == PressureBand::Normal && !disk_active && !mem_active {
             return plan;
         }
+        // Warn: boost focus + EcoQoS demote top background offenders (no WS wipe).
         if band == PressureBand::Warn && !disk_active && !mem_active {
             plan.boost_foreground = true;
+            let focus_tree = focus_tree_pids(sample, sample.focus_pid);
+            let mut offenders: Vec<&ProcessSample> = sample
+                .processes
+                .iter()
+                .filter(|p| !self.protected.is_protected(p))
+                .filter(|p| !focus_tree.contains(&p.pid))
+                .filter(|p| p.cpu_percent >= 8.0)
+                .collect();
+            offenders.sort_by(|a, b| {
+                b.cpu_percent
+                    .partial_cmp(&a.cpu_percent)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            for proc in offenders.iter().take(self.max_actions.min(4)) {
+                plan.actions.push(PlannedAction {
+                    pid: proc.pid,
+                    name: proc.name.clone(),
+                    level: ThrottleLevel::BelowNormal,
+                    apply_job_cap: false,
+                    apply_disk_lock: false,
+                    apply_mem_lock: false,
+                    apply_ecoqos: true,
+                    apply_mem_priority_low: false,
+                    reason: "pressure:warn:ecoqos".into(),
+                });
+            }
             return plan;
         }
         if !need_actions {
@@ -388,6 +419,8 @@ impl PolicyEngine {
                 apply_job_cap: is_build_or_mcp(proc),
                 apply_disk_lock: apply_disk,
                 apply_mem_lock: apply_mem,
+                apply_ecoqos: true,
+                apply_mem_priority_low: apply_mem,
                 reason: reason_base.clone(),
             });
         }
@@ -422,6 +455,9 @@ impl PolicyEngine {
                     existing.level = ThrottleLevel::Suspend;
                     existing.apply_disk_lock = apply_disk || existing.apply_disk_lock;
                     existing.apply_mem_lock = apply_mem || existing.apply_mem_lock;
+                    existing.apply_ecoqos = true;
+                    existing.apply_mem_priority_low =
+                        apply_mem || existing.apply_mem_priority_low;
                     existing.reason = reason;
                 } else {
                     plan.actions.push(PlannedAction {
@@ -431,6 +467,8 @@ impl PolicyEngine {
                         apply_job_cap: false,
                         apply_disk_lock: apply_disk,
                         apply_mem_lock: apply_mem,
+                        apply_ecoqos: true,
+                        apply_mem_priority_low: apply_mem,
                         reason,
                     });
                 }
@@ -587,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn warn_boosts_only() {
+    fn warn_boosts_and_ecoqos() {
         let cfg = GuardianConfig::default();
         let engine = PolicyEngine::new(&cfg, 1);
         let sample = sample_with(vec![ProcessSample {
@@ -603,7 +641,39 @@ mod tests {
         }]);
         let plan = engine.plan(PressureBand::Warn, &sample, None, DiskLockMode::Off, MemLockMode::Off, 0, ThermalLevel::Nominal);
         assert!(plan.boost_foreground);
-        assert!(plan.actions.is_empty());
+        assert!(plan.actions.iter().any(|a| {
+            a.pid == 100 && a.apply_ecoqos && !a.apply_mem_lock && !a.apply_disk_lock
+        }));
+        assert!(plan.actions.iter().all(|a| a.level != ThrottleLevel::Suspend));
+    }
+
+    #[test]
+    fn mem_soft_sets_mem_priority_flag() {
+        let cfg = GuardianConfig::default();
+        let engine = PolicyEngine::new(&cfg, 1);
+        let sample = sample_with(vec![ProcessSample {
+            pid: 21,
+            parent_pid: 1,
+            name: "hog.exe".into(),
+            path: Some(r"C:\temp\hog.exe".into()),
+            cpu_percent: 1.0,
+            memory_bytes: 400_000_000,
+            disk_read_bytes_per_sec: 0,
+            disk_write_bytes_per_sec: 0,
+            cmd_line: None,
+        }]);
+        let plan = engine.plan(
+            PressureBand::Warn,
+            &sample,
+            None,
+            DiskLockMode::Off,
+            MemLockMode::Soft,
+            0,
+            ThermalLevel::Nominal,
+        );
+        assert!(plan.actions.iter().any(|a| {
+            a.pid == 21 && a.apply_mem_lock && a.apply_mem_priority_low && a.apply_ecoqos
+        }));
     }
 
     #[test]

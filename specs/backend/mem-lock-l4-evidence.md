@@ -1,11 +1,11 @@
 # Mem Lock L4 evidence
 
-Generated: 2026-07-17T22:48:51.9408947-12:00
+Generated: 2026-07-18T00:10:23.0644556-12:00
 
 | Check | Result |
 |-------|--------|
 | L4-4 unit `mem_hard_requires_paging` | PASS (ran at probe start) |
-| Samples | 149 over 5m |
+| Samples | 146 over 5m |
 | Soft seen (optional) | yes |
 | Hard latch / mem_lock:hard throttle | PASS (never) |
 

@@ -56,10 +56,10 @@ pub fn dpc_advisory_message(level: DpcAdvisoryLevel) -> Option<&'static str> {
     match level {
         DpcAdvisoryLevel::None => None,
         DpcAdvisoryLevel::Warn => Some(
-            "Elevated DPC/ISR time — may cause stutter. Unstick cannot fix driver/hardware latency; check chipset, network, and audio drivers (WPA / LatencyMon for details).",
+            "Elevated DPC/ISR — may hitch UI/audio. Unstick cannot fix driver latency. Capture: wpr -start GeneralProfile -filemode, reproduce, wpr -stop trace.etl; open in WPA → DPC/ISR by module. Update chipset/network/audio/GPU drivers.",
         ),
         DpcAdvisoryLevel::High => Some(
-            "High DPC/ISR time (>20%) — threads are starved by interrupts/DPCs. Unstick cannot remediate this; update drivers or inspect with Windows Performance Analyzer.",
+            "High DPC/ISR (>20%) — threads starved by interrupts/DPCs. Not remediable in user mode. Use WPR/WPA DPC/ISR graphs to identify the driver (.sys), then update/roll back that driver.",
         ),
     }
 }

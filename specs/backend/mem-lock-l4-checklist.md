@@ -1,7 +1,7 @@
 # Mem Lock L4 false-positive checklist
 
-**Gate:** V2-1 / M1 — [roadmap-next-release.md](../../docs/roadmap-next-release.md)  
-**Design:** [mem-lock-design.md](mem-lock-design.md) § Proof L4  
+**Gate:** V2-1 / M1 â€” [roadmap-next-release.md](../../docs/roadmap-next-release.md)  
+**Design:** [mem-lock-design.md](mem-lock-design.md) Â§ Proof L4  
 **Probe:** `powershell -ExecutionPolicy Bypass -File scripts/Verify-MemLock-L4.ps1`
 
 ## Claim
@@ -12,8 +12,8 @@ Under **mapped-I/O / IDE-like** memory activity (large resident buffers + build 
 
 | # | Scenario | Expect | Method |
 |---|----------|--------|--------|
-| L4-1 | High hard-fault style activity with healthy avail + quiet pagefile | `mem_lock` ≠ `hard` | `mapped-io-hog` |
-| L4-2 | Coding pulse (`cargo check` / build) concurrent | `mem_lock` ≠ `hard` | probe script pulses |
+| L4-1 | High hard-fault style activity with healthy avail + quiet pagefile | `mem_lock` â‰  `hard` | `mapped-io-hog` |
+| L4-2 | Coding pulse (`cargo check` / build) concurrent | `mem_lock` â‰  `hard` | probe script pulses |
 | L4-3 | Protected / IDE names never get `mem_lock` throttle | no hit | status `recent_throttles` scan |
 | L4-4 | L1: commit/faults without paging evidence | Soft only | `cargo test -p guardian-core mem_hard_requires_paging` |
 

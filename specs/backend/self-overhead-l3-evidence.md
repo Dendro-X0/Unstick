@@ -31,3 +31,13 @@
 | L2 `Verify-P2-Automated.ps1` | see ship checklist |
 
 **Claim language:** Self-overhead **improved and verified at L3** on this host; **not** claimed to meet absolute ≤0.5% one-core until a lighter process-sample design lands.
+
+---
+
+## v0.3.0 follow-up (Normal-band every-other-tick enum)
+
+| Label | WallSec | PctOneCore | CSV |
+|-------|---------|------------|-----|
+| v0.3.0 | 45.05 | **1.179** | `self-overhead-measure-v0.3.0-20260718-001131.csv` |
+
+Toward plan S4 (~≤1% one-core idle on soak machine): **PASS** on this sample (~1.18%).

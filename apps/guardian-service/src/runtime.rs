@@ -382,7 +382,7 @@ fn append_event_log(ev: &GuardianEvent) {
 async fn sample_loop(state: Arc<Mutex<ServiceInner>>) -> Result<()> {
     {
         let mut g = state.lock().await;
-        let _ = g.sensor.sample();
+        let _ = g.sensor.sample_ex(true);
     }
     tokio::time::sleep(Duration::from_millis(400)).await;
 
@@ -407,7 +407,17 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
         .map(|u| u > Utc::now())
         .unwrap_or(false);
 
-    let sample = g.sensor.sample();
+    let busy = matches!(
+        g.last_band,
+        PressureBand::Warn | PressureBand::Throttle | PressureBand::Emergency
+    ) || g
+        .last_status
+        .as_ref()
+        .map(|s| {
+            s.disk_lock != DiskLockMode::Off || s.mem_lock != MemLockMode::Off
+        })
+        .unwrap_or(false);
+    let sample = g.sensor.sample_ex(busy);
     let inputs = PressureInputs {
         cpu_percent: sample.cpu_percent,
         memory_available_bytes: sample.memory_available_bytes,
@@ -566,6 +576,8 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
                     apply_job_cap: false,
                     apply_disk_lock: false,
                     apply_mem_lock: false,
+                    apply_ecoqos: true,
+                    apply_mem_priority_low: false,
                     reason: format!("abuse:{}", hit.score),
                 });
             }

@@ -438,7 +438,7 @@ pub fn controls_toggle(ui: &mut Ui, open: bool) -> bool {
     clicked
 }
 
-pub fn status_chip(ui: &mut Ui, text: impl Into<String>, color: Color32) {
+pub fn status_chip(ui: &mut Ui, text: impl Into<String>, color: Color32) -> egui::Response {
     egui::Frame::NONE
         .fill(color.gamma_multiply(0.15))
         .corner_radius(RADIUS_SM)
@@ -451,7 +451,8 @@ pub fn status_chip(ui: &mut Ui, text: impl Into<String>, color: Color32) {
                     .strong()
                     .color(color),
             );
-        });
+        })
+        .response
 }
 
 #[allow(dead_code)] // kept for future interactive profiles
