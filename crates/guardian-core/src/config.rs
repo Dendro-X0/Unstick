@@ -35,6 +35,10 @@ pub struct GuardianConfig {
     /// Soft-only (default) vs last-resort Suspend after streak.
     #[serde(default)]
     pub critical_guard_mode: CriticalGuardMode,
+    /// Opt-in NtSuspend (Last-resort). Default **false** (D1 hardware-control path).
+    /// Without this, `last_resort_suspend` is forced back to SoftOnly on load.
+    #[serde(default)]
+    pub experimental_suspend: bool,
     /// Consecutive Emergency/Disk Hard samples before last-resort Suspend.
     #[serde(default = "default_suspend_escalation_streak")]
     pub suspend_escalation_streak: u32,
@@ -45,6 +49,12 @@ pub struct GuardianConfig {
     /// Disk Lock: PDH-driven soft/hard actions on system disk saturation.
     #[serde(default = "default_true")]
     pub disk_lock_enabled: bool,
+    /// D3: closed-loop disk setpoint (u_disk → soft intensity). Default ON.
+    #[serde(default = "default_true")]
+    pub disk_control_enabled: bool,
+    /// D4: closed-loop memory setpoint (u_mem → soft intensity; WS trim paging-gated). Default ON.
+    #[serde(default = "default_true")]
+    pub mem_control_enabled: bool,
     /// Learn soft/hard thresholds from this machine's disk behavior (default ON).
     #[serde(default = "default_true")]
     pub disk_lock_adaptive: bool,
@@ -143,10 +153,13 @@ impl Default for GuardianConfig {
             pause_until: None,
             emergency_suspend: true,
             critical_guard_mode: CriticalGuardMode::SoftOnly,
+            experimental_suspend: false,
             suspend_escalation_streak: 3,
             max_suspend_pids: 6,
             max_suspend_secs: 45,
             disk_lock_enabled: true,
+            disk_control_enabled: true,
+            mem_control_enabled: true,
             disk_lock_adaptive: true,
             disk_busy_soft_pct: 85.0,
             disk_busy_hard_pct: 95.0,
@@ -214,6 +227,7 @@ pub fn load_config() -> GuardianConfig {
         Ok(raw) => {
             let mut cfg: GuardianConfig = serde_json::from_str(&raw).unwrap_or_default();
             cfg.normalize_whitelist();
+            cfg.normalize_suspend_product_path();
             cfg
         }
         Err(_) => {
@@ -236,6 +250,22 @@ impl GuardianConfig {
                 self.whitelist.push(extra);
             }
         }
+    }
+
+    /// D1: Suspend is experimental — force SoftOnly unless `experimental_suspend`.
+    pub fn normalize_suspend_product_path(&mut self) {
+        if !self.experimental_suspend
+            && self.critical_guard_mode == CriticalGuardMode::LastResortSuspend
+        {
+            self.critical_guard_mode = CriticalGuardMode::SoftOnly;
+        }
+    }
+
+    /// True when NtSuspend / Last-resort is allowed.
+    pub fn suspend_allowed(&self) -> bool {
+        self.experimental_suspend
+            && self.emergency_suspend
+            && self.critical_guard_mode == CriticalGuardMode::LastResortSuspend
     }
 
     pub fn add_whitelist(&mut self, entry: String) -> bool {
@@ -277,6 +307,8 @@ mod tests {
         let cfg = GuardianConfig::default();
         assert!(cfg.emergency_suspend);
         assert_eq!(cfg.critical_guard_mode, CriticalGuardMode::SoftOnly);
+        assert!(!cfg.experimental_suspend);
+        assert!(!cfg.suspend_allowed());
         assert_eq!(cfg.suspend_escalation_streak, 3);
         assert_eq!(cfg.max_suspend_pids, 6);
         assert_eq!(cfg.max_suspend_secs, 45);
@@ -313,5 +345,21 @@ mod tests {
         cfg.normalize_whitelist();
         assert!(cfg.whitelist.iter().any(|w| w == "mygame.exe"));
         assert!(cfg.protected_extra.is_empty());
+    }
+
+    #[test]
+    fn normalize_forces_soft_only_without_experimental_suspend() {
+        let mut cfg = GuardianConfig::default();
+        cfg.critical_guard_mode = CriticalGuardMode::LastResortSuspend;
+        cfg.experimental_suspend = false;
+        cfg.normalize_suspend_product_path();
+        assert_eq!(cfg.critical_guard_mode, CriticalGuardMode::SoftOnly);
+        assert!(!cfg.suspend_allowed());
+
+        cfg.critical_guard_mode = CriticalGuardMode::LastResortSuspend;
+        cfg.experimental_suspend = true;
+        cfg.normalize_suspend_product_path();
+        assert_eq!(cfg.critical_guard_mode, CriticalGuardMode::LastResortSuspend);
+        assert!(cfg.suspend_allowed());
     }
 }

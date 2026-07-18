@@ -1,20 +1,28 @@
-# Unstick — User Guide (v0.3)
+# Unstick — User Guide (v0.4 hardware-control)
+
+## Scope
+
+Unstick is a **Windows** portable **hardware-control** utility for the **OS drive (SSD/HDD)** and **RAM**. It holds utilization just under the freeze cliff with soft actuators. It is not a full performance-optimization suite.
 
 ## What it does
 
-Keeps your Windows desktop responsive on low-end hardware by:
+Under disk / memory pressure it:
 
-- Soft-throttling heavy background work with **EcoQoS / Efficiency Mode** (Microsoft’s power-efficient QoS) under CPU / RAM / disk pressure
-- Lowering **memory priority** on Mem Lock Soft so Windows trims cold pages first
-- **Disk Lock** when the OS drive Active Time hits your safe thresholds
-- **Critical Guard** — Soft only by default; optional last-resort pause of top hogs
-- Optional abuse / miner-style heuristics (not antivirus)
+- **Disk Lock** — soft-throttles background I/O when OS-drive Active Time crosses your thresholds (protects SSD/HDD responsiveness)
+- **Disk control** — closed-loop soft capping when disk load approaches the calibrated envelope (~97–99% of the freeze cliff); EcoQoS → VeryLow I/O → Idle; never Suspend
+- **Mem control** — same closed-loop on RAM pressure; memory-priority first; working-set trim only when paging evidence is present (avoids IDE false positives)
+- **Mem Lock** — lowers **memory priority** (and Soft working-set trim) so cold pages yield first; Hard only with paging evidence
+- Soft-throttles competing background work with **EcoQoS / Efficiency Mode** as a means to keep the machine from hitching when disk/RAM are contended — not a general CPU “optimizer”
+- **Hardware Guard** — Soft only by default; Suspend is experimental opt-in only
+- Optional light abuse / miner-style heuristics (not antivirus)
 
 ## What it does **not** do
 
+- Act as a comprehensive performance suite or “make my PC faster” tool
 - Clear standby / SysMain cache (“RAM cleaner” style) — that hurts more than it helps
 - Fix high **DPC/ISR** stutter from bad drivers — Unstick only warns; use WPR/WPA (see below)
 - Replace antivirus or Task Manager
+- Run on macOS/Linux — **Windows x64 portable only** (no other-OS installers)
 
 ## Quick start
 
@@ -58,27 +66,24 @@ The UI is **on demand** — it does not need to stay open for protection to work
 
 There is no in-app auto-updater yet. Public builds should be Authenticode-signed when a signing cert is available; unsigned zips are for private beta only.
 
-## Safe disk usage
+## Hardware control (primary)
 
-On the **Guard** tab:
+On the **Guard** tab → **Controls**:
 
-- **Soft %** (default 85) — limit offender I/O (VeryLow priority + working-set trim)
-- **Hard %** (default 95) — temporarily pause top disk processes
-- Click **Apply thresholds**
+- Shows live **envelope** (learning idle → calibrated), **u_disk** / **u_mem**, and control mode (`released` / `holding` / `capping`) with intensity.
+- Closed-loop soft capping targets ~**97–99%** of the freeze cliff for OS disk and RAM.
+- Chips on the hero: **Disk cap** / **RAM cap** when actively controlling.
 
-Presets: `85 / 95` or earlier intervention `70 / 90`.
+Leave **Hardware Guard** checked (ARMED). Soft only is the product path.
 
-## Safe available RAM (Mem Lock)
+### Advanced thresholds (optional)
 
-On the **Guard** tab under Controls:
+Under **Advanced thresholds ▸** (collapsed by default):
 
-- **Soft %** (default 15 available) — trim background working sets when free RAM drops below this
-- **Hard %** (default 8 available) — deeper trim; pause only in **Last-resort** mode after a streak (and only with real paging pressure)
-- Click **Apply RAM thresholds**
+- **Disk Soft/Hard %** — legacy Active Time tripwires (safety net alongside closed-loop)
+- **RAM Soft/Hard available %** — Mem Lock tripwires; Hard still requires paging evidence
 
-Presets: `15 / 8` or earlier `20 / 10`. Mem Lock does **not** clear the standby cache.
-
-Mem Lock **Hard** only latches when available/commit thresholds are met **and** paging evidence is present (quiet IDE/git mapped I/O should not Hard-latch). SoftOnly never Suspends from Mem Lock. Soft prefers **memory priority** + EcoQoS before Hard working-set shrink.
+Presets remain available (`85/95`, `70/90`, `15/8`, `20/10`). These do **not** clear standby cache.
 
 ### Event log
 
@@ -103,8 +108,9 @@ Unstick is a **user-mode** Guard. It cannot:
 - Cure kernel DPC/ISR latency (drivers) — it only advises and points you at WPR/WPA
 - Guarantee zero hitching under Extreme memory pressure
 - Replace Task Manager, Resource Monitor, or antivirus
+- Prevent hardware damage (firmware/SMART/thermal still own that)
 
-Soft remediation uses **EcoQoS** and **memory priority** (Microsoft Efficiency Mode style) before Hard working-set shrink or Suspend.
+Soft remediation uses **EcoQoS** and **memory priority** (Microsoft Efficiency Mode style). **NtSuspend is not part of the product path** unless you explicitly opt in (see Hardware Guard).
 
 ## Whitelist
 
@@ -112,24 +118,24 @@ Open the **WHITELIST** tab (or Monitor → Whitelist next to a process).
 
 Add game or app names (`steam.exe`) or path fragments (`\Epic Games\`). Whitelisted programs are **never** soft-throttled, Disk-Locked, or paused.
 
-## Critical Guard (safe pause)
+## Hardware Guard
 
-Checkbox on Guard: master enable for Critical Guard. Choose a mode in Controls:
+Checkbox on Guard: master enable for closed-loop disk/RAM control + Soft Disk/Mem Lock.
 
 | Mode | Default | Behavior |
 |------|---------|----------|
-| **Soft only** | Yes | Lowers background priority / I/O under pressure — never pauses processes |
-| **Last-resort pause** | No | Same soft ladder first; only after sustained Emergency / Disk Lock Hard may pause top offenders |
+| **Soft only** | **Yes (product path)** | Closed-loop soft control — **never** NtSuspend |
+| **Last-resort pause** | Hidden unless opted in | Experimental: may NtSuspend top offenders after sustained Emergency |
+
+**Opt-in Suspend (not recommended):** set `"experimental_suspend": true` in `%LOCALAPPDATA%\Unstick\config.json`, restart the service, then Last-resort appears in the UI. Suspend can leave apps stuck; Soft restore is preferred.
 
 The focused app (and its child processes) is never throttled or paused. When Guard is LIVE you see a **Focus · app.exe** chip.
 
-**Never paused by default:** Explorer, Cursor/VS Code, common browsers (Chrome/Edge/Firefox/Brave), and interactive shells (Windows Terminal, PowerShell, cmd).
-
-Paused processes (last-resort mode only) resume when pressure drops, after ~45 seconds max (**and will not be immediately re-paused**), when you Pause Guard, or after a service restart (crash recovery). Whitelist anything else you never want paused.
+**Never Soft-throttled by default:** Explorer, Cursor/VS Code, common browsers (Chrome/Edge/Firefox/Brave), and interactive shells (Windows Terminal, PowerShell, cmd).
 
 ## Risks (read once)
 
-- Pausing is intentional under extreme load; whitelist anything you never want frozen (games launchers, DAWs, etc.).
+- Soft demotions (priority / EcoQoS / mem-priority) are restored when pressure drops or a process leaves the plan.
 - Elevated (admin) apps may ignore Guard unless you run elevated or whitelist them.
 - This is **user-mode** software — it cannot hard-cap disk IOPS like a kernel driver.
 - Heuristics are **not** antivirus.
@@ -139,6 +145,7 @@ Paused processes (last-resort mode only) resume when pressure drops, after ~45 s
 | Path | Purpose |
 |------|---------|
 | `%LOCALAPPDATA%\Unstick\config.json` | Settings, whitelist, disk thresholds |
+| `%LOCALAPPDATA%\Unstick\envelope_profile.json` | Idle-calibrated hardware envelope (D2) |
 | `%LOCALAPPDATA%\Unstick\guardian.log` | Rotating service log |
 | `%LOCALAPPDATA%\Unstick\events.jsonl` | Throttle / suspend events |
 | `%LOCALAPPDATA%\Unstick\suspend_ledger.json` | Crash-recovery list (cleared after resume) |
@@ -152,4 +159,4 @@ Paused processes (last-resort mode only) resume when pressure drops, after ~45 s
 | Game stuttered / paused | Whitelist the game; or Pause Guard 15m |
 | “elevated process” warning | Whitelist that app or run service as admin |
 
-Version: see **v0.1.0** in the UI header and status.
+Version: see the version chip in the UI header and `status.version`.

@@ -1,0 +1,511 @@
+//! Soft-axis closed-loop control (Option 2 / D3 disk + D4 memory).
+//!
+//! Bang-bang with hysteresis around envelope `u_set_lo`..=`u_set_hi` (~0.97–0.99).
+//! Soft actuators only — never NtSuspend. Memory WS trim is paging-gated (L4).
+
+use serde::{Deserialize, Serialize};
+
+use crate::policy::{PlannedAction, PolicyEngine};
+use crate::types::{SystemSample, ThrottleLevel};
+
+const MAX_INTENSITY: u8 = 3;
+/// Minimum ticks between intensity steps (anti-chatter).
+const MIN_HOLD_TICKS: u32 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DiskControlMode {
+    #[default]
+    Released,
+    Holding,
+    Capping,
+}
+
+impl DiskControlMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Released => "released",
+            Self::Holding => "holding",
+            Self::Capping => "capping",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiskControlState {
+    pub intensity: u8,
+    pub mode: DiskControlMode,
+    pub u_disk: f32,
+    pub u_set_lo: f32,
+    pub u_set_hi: f32,
+}
+
+impl Default for DiskControlState {
+    fn default() -> Self {
+        Self {
+            intensity: 0,
+            mode: DiskControlMode::Released,
+            u_disk: 0.0,
+            u_set_lo: 0.97,
+            u_set_hi: 0.99,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DiskControlLoop {
+    intensity: u8,
+    hold_ticks: u32,
+    mode: DiskControlMode,
+    enabled: bool,
+}
+
+impl Default for DiskControlLoop {
+    fn default() -> Self {
+        Self {
+            intensity: 0,
+            hold_ticks: 0,
+            mode: DiskControlMode::Released,
+            enabled: true,
+        }
+    }
+}
+
+impl DiskControlLoop {
+    pub fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            ..Default::default()
+        }
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        if !enabled {
+            self.intensity = 0;
+            self.hold_ticks = 0;
+            self.mode = DiskControlMode::Released;
+        }
+    }
+
+    pub fn intensity(&self) -> u8 {
+        self.intensity
+    }
+
+    /// Step the bang-bang controller. One intensity step per call when outside the band.
+    pub fn step(&mut self, u_disk: f32, u_set_lo: f32, u_set_hi: f32) -> DiskControlState {
+        let u_lo = u_set_lo.min(u_set_hi);
+        let u_hi = u_set_lo.max(u_set_hi);
+
+        if !self.enabled {
+            return DiskControlState {
+                intensity: 0,
+                mode: DiskControlMode::Released,
+                u_disk,
+                u_set_lo: u_lo,
+                u_set_hi: u_hi,
+            };
+        }
+
+        if self.hold_ticks > 0 {
+            self.hold_ticks -= 1;
+            return self.state(u_disk, u_lo, u_hi);
+        }
+
+        if u_disk > u_hi {
+            if self.intensity < MAX_INTENSITY {
+                self.intensity += 1;
+                self.hold_ticks = MIN_HOLD_TICKS;
+            }
+            self.mode = DiskControlMode::Capping;
+        } else if u_disk < u_lo {
+            if self.intensity > 0 {
+                self.intensity -= 1;
+                self.hold_ticks = MIN_HOLD_TICKS;
+            }
+            self.mode = if self.intensity == 0 {
+                DiskControlMode::Released
+            } else {
+                DiskControlMode::Holding
+            };
+        } else {
+            self.mode = if self.intensity == 0 {
+                DiskControlMode::Released
+            } else {
+                DiskControlMode::Holding
+            };
+        }
+
+        self.state(u_disk, u_lo, u_hi)
+    }
+
+    fn state(&self, u_disk: f32, u_lo: f32, u_hi: f32) -> DiskControlState {
+        DiskControlState {
+            intensity: self.intensity,
+            mode: self.mode,
+            u_disk,
+            u_set_lo: u_lo,
+            u_set_hi: u_hi,
+        }
+    }
+}
+
+/// Rank disk offenders and map intensity → soft PlannedAction (no Suspend).
+pub fn plan_disk_control_actions(
+    engine: &PolicyEngine,
+    sample: &SystemSample,
+    intensity: u8,
+) -> Vec<PlannedAction> {
+    if intensity == 0 {
+        return Vec::new();
+    }
+
+    let focus_tree = crate::policy::focus_tree_pids(sample, sample.focus_pid);
+    let mut offenders: Vec<&crate::types::ProcessSample> = sample
+        .processes
+        .iter()
+        .filter(|p| !engine.protected.is_protected(p))
+        .filter(|p| !focus_tree.contains(&p.pid))
+        .collect();
+    offenders.sort_by(|a, b| {
+        let da = a.disk_read_bytes_per_sec.saturating_add(a.disk_write_bytes_per_sec);
+        let db = b.disk_read_bytes_per_sec.saturating_add(b.disk_write_bytes_per_sec);
+        db.cmp(&da).then_with(|| {
+            b.cpu_percent
+                .partial_cmp(&a.cpu_percent)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    });
+
+    let (level, apply_disk, reason) = match intensity {
+        1 => (
+            ThrottleLevel::BelowNormal,
+            false,
+            "disk_control:ecoqos",
+        ),
+        2 => (ThrottleLevel::BelowNormal, true, "disk_control:io_verylow"),
+        _ => (ThrottleLevel::Idle, true, "disk_control:idle"),
+    };
+
+    offenders
+        .iter()
+        .take(engine.max_actions)
+        .map(|proc| PlannedAction {
+            pid: proc.pid,
+            name: proc.name.clone(),
+            level,
+            apply_job_cap: false,
+            apply_disk_lock: apply_disk,
+            apply_mem_lock: false,
+            apply_ecoqos: true,
+            apply_mem_priority_low: false,
+            reason: reason.into(),
+        })
+        .collect()
+}
+
+/// Merge soft-control actions into an existing plan (stronger level / flags win).
+pub fn merge_control_actions(plan: &mut crate::policy::ActionPlan, extras: Vec<PlannedAction>) {
+    for extra in extras {
+        if let Some(existing) = plan.actions.iter_mut().find(|a| a.pid == extra.pid) {
+            existing.level = max_soft_level(existing.level, extra.level);
+            existing.apply_disk_lock = existing.apply_disk_lock || extra.apply_disk_lock;
+            existing.apply_mem_lock = existing.apply_mem_lock || extra.apply_mem_lock;
+            existing.apply_ecoqos = existing.apply_ecoqos || extra.apply_ecoqos;
+            existing.apply_mem_priority_low =
+                existing.apply_mem_priority_low || extra.apply_mem_priority_low;
+            if extra.reason.starts_with("disk_control:")
+                || extra.reason.starts_with("mem_control:")
+            {
+                existing.reason = extra.reason;
+            }
+        } else {
+            plan.actions.push(extra);
+        }
+    }
+}
+
+/// Alias for D3 call sites.
+pub fn merge_disk_control(plan: &mut crate::policy::ActionPlan, extras: Vec<PlannedAction>) {
+    merge_control_actions(plan, extras);
+}
+
+/// Rank RSS offenders; WS trim (`apply_mem_lock`) only when `paging` is true (L4 gate).
+pub fn plan_mem_control_actions(
+    engine: &PolicyEngine,
+    sample: &SystemSample,
+    intensity: u8,
+    paging: bool,
+) -> Vec<PlannedAction> {
+    if intensity == 0 {
+        return Vec::new();
+    }
+
+    let focus_tree = crate::policy::focus_tree_pids(sample, sample.focus_pid);
+    let mut offenders: Vec<&crate::types::ProcessSample> = sample
+        .processes
+        .iter()
+        .filter(|p| !engine.protected.is_protected(p))
+        .filter(|p| !focus_tree.contains(&p.pid))
+        .collect();
+    offenders.sort_by(|a, b| {
+        b.memory_bytes.cmp(&a.memory_bytes).then_with(|| {
+            b.cpu_percent
+                .partial_cmp(&a.cpu_percent)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    });
+
+    // Without paging evidence: EcoQoS + MEMORY_PRIORITY_LOW only (no EmptyWorkingSet / Hard shrink).
+    let apply_ws = intensity >= 2 && paging;
+    let (level, reason) = match intensity {
+        1 => (ThrottleLevel::BelowNormal, "mem_control:ecoqos_memprio"),
+        2 => (
+            ThrottleLevel::BelowNormal,
+            if apply_ws {
+                "mem_control:ws_soft"
+            } else {
+                "mem_control:memprio_only"
+            },
+        ),
+        _ => (
+            ThrottleLevel::Idle,
+            if apply_ws {
+                "mem_control:ws_idle"
+            } else {
+                "mem_control:idle_memprio"
+            },
+        ),
+    };
+
+    offenders
+        .iter()
+        .take(engine.max_actions)
+        .map(|proc| PlannedAction {
+            pid: proc.pid,
+            name: proc.name.clone(),
+            level,
+            apply_job_cap: false,
+            apply_disk_lock: false,
+            apply_mem_lock: apply_ws,
+            apply_ecoqos: true,
+            apply_mem_priority_low: true,
+            reason: reason.into(),
+        })
+        .collect()
+}
+
+/// Same bang-bang loop as disk (D4).
+pub type MemControlLoop = DiskControlLoop;
+pub type MemControlMode = DiskControlMode;
+pub type MemControlState = DiskControlState;
+
+fn max_soft_level(a: ThrottleLevel, b: ThrottleLevel) -> ThrottleLevel {
+    fn rank(l: ThrottleLevel) -> u8 {
+        match l {
+            ThrottleLevel::None => 0,
+            ThrottleLevel::BelowNormal => 1,
+            ThrottleLevel::Idle => 2,
+            ThrottleLevel::Suspend => 2, // treat as Idle for soft merge; Suspend only from experimental path
+        }
+    }
+    if rank(b) > rank(a) {
+        if b == ThrottleLevel::Suspend {
+            ThrottleLevel::Idle
+        } else {
+            b
+        }
+    } else {
+        a
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::GuardianConfig;
+    use crate::envelope::{U_SET_HI, U_SET_LO};
+
+    #[test]
+    fn escalates_above_setpoint_hi() {
+        let mut loop_ = DiskControlLoop::new(true);
+        let s = loop_.step(1.05, U_SET_LO, U_SET_HI);
+        assert_eq!(s.intensity, 1);
+        assert_eq!(s.mode, DiskControlMode::Capping);
+        // hold ticks
+        let s = loop_.step(1.05, U_SET_LO, U_SET_HI);
+        assert_eq!(s.intensity, 1);
+        let s = loop_.step(1.05, U_SET_LO, U_SET_HI);
+        assert_eq!(s.intensity, 1);
+        let s = loop_.step(1.05, U_SET_LO, U_SET_HI);
+        assert_eq!(s.intensity, 2);
+    }
+
+    #[test]
+    fn releases_below_setpoint_lo() {
+        let mut loop_ = DiskControlLoop::new(true);
+        for _ in 0..12 {
+            let _ = loop_.step(1.2, U_SET_LO, U_SET_HI);
+        }
+        assert_eq!(loop_.intensity(), MAX_INTENSITY);
+        // Drop below lo and wait through holds
+        for _ in 0..20 {
+            let _ = loop_.step(0.5, U_SET_LO, U_SET_HI);
+        }
+        assert_eq!(loop_.intensity(), 0);
+        let s = loop_.step(0.5, U_SET_LO, U_SET_HI);
+        assert_eq!(s.mode, DiskControlMode::Released);
+    }
+
+    #[test]
+    fn holds_inside_band() {
+        let mut loop_ = DiskControlLoop::new(true);
+        let _ = loop_.step(1.1, U_SET_LO, U_SET_HI);
+        // drain hold
+        let _ = loop_.step(0.98, U_SET_LO, U_SET_HI);
+        let _ = loop_.step(0.98, U_SET_LO, U_SET_HI);
+        let s = loop_.step(0.98, U_SET_LO, U_SET_HI);
+        assert_eq!(s.intensity, 1);
+        assert_eq!(s.mode, DiskControlMode::Holding);
+    }
+
+    #[test]
+    fn disabled_stays_released() {
+        let mut loop_ = DiskControlLoop::new(false);
+        let s = loop_.step(2.0, U_SET_LO, U_SET_HI);
+        assert_eq!(s.intensity, 0);
+        assert_eq!(s.mode, DiskControlMode::Released);
+    }
+
+    #[test]
+    fn plan_actions_never_suspend() {
+        use crate::types::ProcessSample;
+        use chrono::Utc;
+
+        let cfg = GuardianConfig::default();
+        let engine = PolicyEngine::new(&cfg, 1);
+        let sample = SystemSample {
+            timestamp: Utc::now(),
+            cpu_percent: 50.0,
+            memory_total_bytes: 8 << 30,
+            memory_available_bytes: 4 << 30,
+            memory_commit_percent: 40.0,
+            disk_busy_percent: 95.0,
+            disk_queue_length: 8.0,
+            disk_io_bytes_per_sec: 50_000_000,
+            hard_faults_per_sec: 0.0,
+            focus_pid: Some(10),
+            disk_latency_sec: 0.05,
+            pagefile_writes_per_sec: 0.0,
+            paging_file_pct: 0.0,
+            dpc_time_percent: 0.0,
+            interrupt_time_percent: 0.0,
+            on_battery: false,
+            battery_percent: None,
+            cooling_mode: Default::default(),
+            cpu_mhz_ratio: 1.0,
+            thermal_level: Default::default(),
+            processes: vec![
+                ProcessSample {
+                    pid: 10,
+                    parent_pid: 0,
+                    name: "game.exe".into(),
+                    path: None,
+                    cpu_percent: 40.0,
+                    memory_bytes: 0,
+                    disk_read_bytes_per_sec: 0,
+                    disk_write_bytes_per_sec: 0,
+                    cmd_line: None,
+                },
+                ProcessSample {
+                    pid: 20,
+                    parent_pid: 0,
+                    name: "hog.exe".into(),
+                    path: None,
+                    cpu_percent: 10.0,
+                    memory_bytes: 0,
+                    disk_read_bytes_per_sec: 0,
+                    disk_write_bytes_per_sec: 80_000_000,
+                    cmd_line: None,
+                },
+            ],
+        };
+        let actions = plan_disk_control_actions(&engine, &sample, 3);
+        assert!(!actions.is_empty());
+        assert!(actions.iter().all(|a| a.pid != 10));
+        assert!(actions.iter().all(|a| a.level != ThrottleLevel::Suspend));
+        assert!(actions.iter().any(|a| a.pid == 20 && a.apply_disk_lock));
+    }
+
+    fn mem_sample(rss_hog: u64) -> SystemSample {
+        use crate::types::ProcessSample;
+        use chrono::Utc;
+        SystemSample {
+            timestamp: Utc::now(),
+            cpu_percent: 20.0,
+            memory_total_bytes: 8 << 30,
+            memory_available_bytes: 400 << 20,
+            memory_commit_percent: 90.0,
+            disk_busy_percent: 10.0,
+            disk_queue_length: 0.2,
+            disk_io_bytes_per_sec: 1_000_000,
+            hard_faults_per_sec: 0.0,
+            focus_pid: Some(10),
+            disk_latency_sec: 0.002,
+            pagefile_writes_per_sec: 0.0,
+            paging_file_pct: 5.0,
+            dpc_time_percent: 0.0,
+            interrupt_time_percent: 0.0,
+            on_battery: false,
+            battery_percent: None,
+            cooling_mode: Default::default(),
+            cpu_mhz_ratio: 1.0,
+            thermal_level: Default::default(),
+            processes: vec![
+                ProcessSample {
+                    pid: 10,
+                    parent_pid: 0,
+                    name: "Code.exe".into(),
+                    path: None,
+                    cpu_percent: 5.0,
+                    memory_bytes: 2 << 30,
+                    disk_read_bytes_per_sec: 0,
+                    disk_write_bytes_per_sec: 0,
+                    cmd_line: None,
+                },
+                ProcessSample {
+                    pid: 20,
+                    parent_pid: 0,
+                    name: "mem-hog.exe".into(),
+                    path: None,
+                    cpu_percent: 1.0,
+                    memory_bytes: rss_hog,
+                    disk_read_bytes_per_sec: 0,
+                    disk_write_bytes_per_sec: 0,
+                    cmd_line: None,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn mem_plan_without_paging_skips_ws_trim() {
+        let cfg = GuardianConfig::default();
+        let engine = PolicyEngine::new(&cfg, 1);
+        let actions = plan_mem_control_actions(&engine, &mem_sample(3 << 30), 3, false);
+        assert!(actions.iter().any(|a| a.pid == 20));
+        assert!(actions.iter().all(|a| !a.apply_mem_lock));
+        assert!(actions.iter().all(|a| a.apply_mem_priority_low && a.apply_ecoqos));
+        assert!(actions.iter().all(|a| a.level != ThrottleLevel::Suspend));
+        assert!(actions.iter().all(|a| a.pid != 10));
+    }
+
+    #[test]
+    fn mem_plan_with_paging_allows_ws_trim() {
+        let cfg = GuardianConfig::default();
+        let engine = PolicyEngine::new(&cfg, 1);
+        let actions = plan_mem_control_actions(&engine, &mem_sample(3 << 30), 3, true);
+        assert!(actions.iter().any(|a| a.pid == 20 && a.apply_mem_lock));
+        assert!(actions.iter().all(|a| a.level != ThrottleLevel::Suspend));
+    }
+}

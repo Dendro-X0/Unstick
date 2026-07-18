@@ -1,7 +1,9 @@
 //! Shared types, pressure scoring, and policy planning for Unstick.
 
 mod config;
+mod control;
 mod disk_calibrate;
+mod envelope;
 mod events;
 mod ipc;
 mod advisory;
@@ -19,7 +21,15 @@ pub use config::{
     CriticalGuardMode, GuardianConfig, load_config, save_config, config_dir, events_path,
     status_path,
 };
+pub use control::{
+    merge_control_actions, merge_disk_control, plan_disk_control_actions, plan_mem_control_actions,
+    DiskControlLoop, DiskControlMode, DiskControlState, MemControlLoop, MemControlMode,
+    MemControlState,
+};
 pub use disk_calibrate::{saturation_index, DiskCalibrator};
+pub use envelope::{
+    utilization_disk, utilization_mem, EnvelopeCalibrator, EnvelopeSnapshot, U_SET_HI, U_SET_LO,
+};
 pub use events::{read_recent_events, recent_events_for_client};
 pub use ipc::{
     AbuseSummary, ApplyDeniedSummary, ClientRequest, ServerPush, StatusSnapshot, SuspendedSummary,

@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::advisory::{CoolingMode, ThermalLevel};
 use crate::config::CriticalGuardMode;
+use crate::control::DiskControlMode;
+use crate::envelope::EnvelopeSnapshot;
 use crate::pressure::{DiskLockMode, MemLockMode, PressureBand};
 use crate::qos::{NapPolicy, QosClass};
 use crate::types::{FocusProfile, GuardianEvent, ProcessSample, ThrottleLevel};
@@ -44,6 +46,9 @@ pub struct StatusSnapshot {
     pub critical_guard: bool,
     #[serde(default)]
     pub critical_guard_mode: CriticalGuardMode,
+    /// NtSuspend / Last-resort requires this opt-in (D1).
+    #[serde(default)]
+    pub experimental_suspend: bool,
     #[serde(default)]
     pub focus_pid: Option<u32>,
     #[serde(default)]
@@ -121,6 +126,19 @@ pub struct StatusSnapshot {
     pub stall_io_full: f32,
     #[serde(default)]
     pub stall_thermal: f32,
+    /// D2: idle-calibrated hardware envelope + live u_disk / u_mem.
+    #[serde(default)]
+    pub envelope: EnvelopeSnapshot,
+    /// D3: disk closed-loop intensity 0..=3.
+    #[serde(default)]
+    pub disk_control_intensity: u8,
+    #[serde(default)]
+    pub disk_control_mode: DiskControlMode,
+    /// D4: memory closed-loop intensity 0..=3 (WS trim requires paging evidence).
+    #[serde(default)]
+    pub mem_control_intensity: u8,
+    #[serde(default)]
+    pub mem_control_mode: DiskControlMode,
     #[serde(default)]
     pub on_battery: bool,
     #[serde(default)]

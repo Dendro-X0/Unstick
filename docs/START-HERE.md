@@ -1,7 +1,10 @@
 # Unstick — start here
 
-1. Design: [specs/backend/guardian-design.md](../specs/backend/guardian-design.md)
-2. **Roadmaps:** [next release](roadmap-next-release.md) · [v0.1 detail](roadmap-v0.1.md) · [v0.3.0 release](RELEASE-v0.3.0.md)
+**Scope:** Windows-only disk/RAM **hardware control** — not a cross-platform or general performance suite.  
+**Option 2:** [hardware-control redesign](../specs/backend/hardware-control-redesign.md) — D0–D5 **Done** (next: package `v0.4.0` when ready).
+
+1. Design: [specs/backend/guardian-design.md](../specs/backend/guardian-design.md) · **redesign:** [hardware-control-redesign.md](../specs/backend/hardware-control-redesign.md)
+2. **Roadmaps:** [next release](roadmap-next-release.md) · [v0.1 detail](roadmap-v0.1.md) · [v0.4.0 release](RELEASE-v0.4.0.md)
 3. **User guide:** [USER-GUIDE.md](USER-GUIDE.md)
 4. UI: [frontend-spec.md](frontend-spec.md)
 5. Dev loop:

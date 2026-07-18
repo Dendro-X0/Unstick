@@ -9,7 +9,9 @@ use guardian_core::{
     classify_dpc_isr, classify_focus_profile, dpc_advisory_message, dpc_isr_raw_level,
     events_path, load_config, recent_events_for_client, save_config, score_pressure_tracked,
     status_path, thermal_advisory_message, ActionPlan, ApplyDeniedSummary, ClientRequest,
-    CriticalGuardMode, DiskCalibrator, DiskLockMode, GuardianConfig, GuardianEvent, HysteresisTracker,
+    CriticalGuardMode, DiskCalibrator, DiskControlLoop, DiskLockMode, EnvelopeCalibrator,
+    GuardianConfig, GuardianEvent, HysteresisTracker, MemControlLoop, merge_control_actions,
+    paging_pressure_evidence, plan_disk_control_actions, plan_mem_control_actions,
     MemLockMode, MemLockThresholds, PressureBand, PressureInputs, PressureState, ServerPush,
     StatusSnapshot, SuspendedSummary, ThrottleLevel, AbuseSummary, ThrottleSummary, plan_qos,
 };
@@ -58,6 +60,9 @@ pub struct ServiceInner {
     pub ema: Option<f32>,
     pub hysteresis: HysteresisTracker,
     pub disk_cal: DiskCalibrator,
+    pub envelope_cal: EnvelopeCalibrator,
+    pub disk_control: DiskControlLoop,
+    pub mem_control: MemControlLoop,
     pub last_band: PressureBand,
     pub detector: AbuseDetector,
     pub throttle: ThrottleExecutor,
@@ -98,6 +103,9 @@ impl ServiceInner {
             ema: None,
             hysteresis: HysteresisTracker::default(),
             disk_cal: DiskCalibrator::new(&snapshot),
+            envelope_cal: EnvelopeCalibrator::new(&snapshot),
+            disk_control: DiskControlLoop::new(snapshot.disk_control_enabled),
+            mem_control: MemControlLoop::new(snapshot.mem_control_enabled),
             last_band: PressureBand::Normal,
             detector: AbuseDetector::new(&snapshot),
             throttle,
@@ -296,10 +304,16 @@ impl ServiceInner {
             ClientRequest::SetCriticalGuardMode { mode } => {
                 {
                     let mut cfg = self.cfg.write().await;
+                    if mode == CriticalGuardMode::LastResortSuspend && !cfg.experimental_suspend {
+                        return ServerPush::Error {
+                            message: "last_resort_suspend requires experimental_suspend=true in config.json (D1 Soft-only product path)".into(),
+                        };
+                    }
                     cfg.critical_guard_mode = mode;
                     if mode == CriticalGuardMode::LastResortSuspend && !cfg.emergency_suspend {
                         cfg.emergency_suspend = true;
                     }
+                    cfg.normalize_suspend_product_path();
                     let _ = save_config(&cfg);
                 }
                 if mode == CriticalGuardMode::SoftOnly {
@@ -401,6 +415,9 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
     g.throttle.set_job_cpu_rate(cfg.job_cpu_rate_percent);
     g.throttle.ledger.set_max_secs(cfg.max_suspend_secs);
     g.disk_cal.sync_from_config(&cfg);
+    g.envelope_cal.sync_from_config(&cfg);
+    g.disk_control.set_enabled(cfg.disk_control_enabled);
+    g.mem_control.set_enabled(cfg.mem_control_enabled);
 
     let paused = cfg
         .pause_until
@@ -447,6 +464,33 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
         Some(&mem_thr),
     );
     g.ema = Some(pressure.score);
+
+    let envelope = g.envelope_cal.observe(
+        &sample,
+        pressure.band,
+        pressure.disk_lock,
+        pressure.mem_lock,
+        paused,
+        cfg.emergency_suspend,
+        disk_thr.soft_queue,
+    );
+    let disk_ctrl = if paused || !cfg.emergency_suspend {
+        g.disk_control.set_enabled(false);
+        g.disk_control.step(0.0, envelope.u_set_lo, envelope.u_set_hi)
+    } else {
+        g.disk_control.set_enabled(cfg.disk_control_enabled);
+        g.disk_control
+            .step(envelope.u_disk, envelope.u_set_lo, envelope.u_set_hi)
+    };
+    let mem_ctrl = if paused || !cfg.emergency_suspend {
+        g.mem_control.set_enabled(false);
+        g.mem_control.step(0.0, envelope.u_set_lo, envelope.u_set_hi)
+    } else {
+        g.mem_control.set_enabled(cfg.mem_control_enabled);
+        g.mem_control
+            .step(envelope.u_mem, envelope.u_set_lo, envelope.u_set_hi)
+    };
+    let paging = paging_pressure_evidence(&inputs);
 
     if pressure.band != g.last_band {
         g.push_event(GuardianEvent::Pressure {
@@ -562,6 +606,15 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
         )
     };
 
+    if !paused && cfg.emergency_suspend && disk_ctrl.intensity > 0 {
+        let extras = plan_disk_control_actions(&engine, &sample, disk_ctrl.intensity);
+        merge_control_actions(&mut plan, extras);
+    }
+    if !paused && cfg.emergency_suspend && mem_ctrl.intensity > 0 {
+        let extras = plan_mem_control_actions(&engine, &sample, mem_ctrl.intensity, paging);
+        merge_control_actions(&mut plan, extras);
+    }
+
     if !paused {
         for hit in &hits {
             let proc = sample.processes.iter().find(|p| p.pid == hit.pid);
@@ -613,6 +666,8 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
     if pressure.band == PressureBand::Normal
         && pressure.disk_lock == DiskLockMode::Off
         && pressure.mem_lock == MemLockMode::Off
+        && disk_ctrl.intensity == 0
+        && mem_ctrl.intensity == 0
         && !paused
     {
         g.throttle.restore_all();
@@ -697,6 +752,10 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
                 g.push_event(ev);
             }
         }
+        // D1: restore EcoQoS / mem-prio / priority for PIDs no longer in the plan.
+        let plan_pids: std::collections::HashSet<u32> =
+            plan.actions.iter().map(|a| a.pid).collect();
+        g.throttle.restore_not_in_plan(&plan_pids);
     }
 
     let live: Vec<u32> = sample.processes.iter().map(|p| p.pid).collect();
@@ -739,6 +798,7 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
         pause_until_unix: cfg.pause_until.map(|t| t.timestamp()),
         critical_guard: cfg.emergency_suspend,
         critical_guard_mode: cfg.critical_guard_mode,
+        experimental_suspend: cfg.experimental_suspend,
         focus_pid: sample.focus_pid,
         focus_name,
         focus_profile,
@@ -776,6 +836,11 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
         stall_memory_full: pressure.stalls.memory_full,
         stall_io_full: pressure.stalls.io_full,
         stall_thermal: pressure.stalls.thermal_some,
+        envelope,
+        disk_control_intensity: disk_ctrl.intensity,
+        disk_control_mode: disk_ctrl.mode,
+        mem_control_intensity: mem_ctrl.intensity,
+        mem_control_mode: mem_ctrl.mode,
         on_battery: sample.on_battery,
         battery_percent: sample.battery_percent,
         cooling_mode: sample.cooling_mode,

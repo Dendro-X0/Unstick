@@ -3,10 +3,10 @@
 ## Meta
 
 - **Product:** Unstick
-- **Audience:** Developers and gamers on low-end Windows PCs who need freeze prevention + light abuse awareness
-- **Reference:** Smart Game Booster–style shell (central CTA, top tabs, bottom hardware gauges) — **not** a game-only booster clone
+- **Audience:** Windows users who need **disk/RAM hardware control** under pressure — not a general PC-optimizer audience
+- **Reference:** Compact Guard shell (central CTA, top tabs, bottom hardware gauges) — **not** a booster-suite clone
 - **Stack:** Native Rust **eframe/egui** window + existing named-pipe IPC (`guardian-service`). Tray remains optional companion. (Tauri/React deferred — keep one Rust toolchain for v1 UI.)
-- **Spec status:** approved for implement (v1.2 Guard-first)
+- **Spec status:** D5 hardware-control framing (v1.5)
 - **API dependency:** `ClientRequest` / `ServerPush` / `StatusSnapshot` / status.json fallback (already shipped)
 
 ## Visual direction
@@ -58,45 +58,27 @@
 
 1. Large circular CTA: **ARMED** / **PAUSED** — click Pause 15m / Resume
 2. Centered pressure cluster: small **PRESSURE** label, band chip, score
-3. Compact status chips when relevant (Disk Lock / Mem Lock / suspended) — centered under CTA
+3. Compact status chips when relevant (Disk/RAM control capping·holding, Disk Lock / Mem Lock, suspended) — centered under CTA
 4. Centered **Controls** pill (collapsed by default)
-
-### Symmetry (v1.3)
-
-- Vertically center the Guard hero when Controls is collapsed
-- Pressure readout is a centered stack (no left-heavy “Pressure band” label)
-- Footer gauges form a centered equal-width block
-- PAUSED CTA uses calm teal rings; ARMED keeps coral pulse
-- Toasts render as a centered chip with shortened copy
-
-### Responsive layout (v1.4)
-
-- Footer gauges use **equal fractional columns** sized from `available_width` with gutters (no fixed max that cramps labels)
-- Pressure **NORMAL** chip is a fixed-height painted pill (24px) — never stretches with the row
-- Monitor sparklines use `ui.columns(2)` and fill each column’s width (no clipping on resize)
 
 ### Secondary — collapsible **Controls** strip (collapsed by default)
 
-Toggle label: `Controls ▸` / `Controls ▾`. Auto-expand when Disk Lock / Mem Lock is active or `suspended_n > 0`.
+Toggle label: `Controls ▸` / `Controls ▾`. Auto-expand when Disk/Mem Lock is active, disk/mem **control** is holding/capping, or `suspended_n > 0`.
 
 Contents:
 
-1. Critical Guard checkbox
-2. Mode: **Soft only** (default) / **Last-resort pause**
-3. Suspended count chip
+1. **Hardware Guard** checkbox (master enable)
+2. Mode: **Soft only** (default); **Last-resort pause** only if `experimental_suspend`
+3. Suspended count chip (rarely non-zero on Soft-only path)
 4. Safety / recovered / elevation banners (only when non-empty)
-5. Safe disk usage: Soft / Hard sliders + Apply + presets `85/95`, `70/90`
+5. **Hardware control** readout: envelope calibrated/learning, `u_disk` / `u_mem`, setpoint band, mode + intensity
+6. **Advanced thresholds ▸** (collapsed): Soft/Hard disk Active Time % and RAM available % sliders + Apply + presets
 
 Hero also shows **Focus · app.exe** when the service reports a foreground process (LIVE only).
 
-### Removed from Guard
-
-- Decorative **DEV BUILDS** / **GAMES & PLAY** profile cards (non-interactive; cluttered the hero)
-- Focus profile is a status label only (`dev` / `play` / `other`) — same scheduling ladder
-
 ### Motion
 
-- CTA ring pulse when band ≥ warn or Disk Lock on
+- CTA ring pulse when band ≥ warn, Disk/Mem Lock on, or control **capping**
 - Gauge fills animate toward new values (lerp)
 
 ## Routing (tabs)
@@ -162,7 +144,7 @@ Segmented LED-style bars (teal). Amber/coral fill when >70% / >85%.
 | Trust | `TrustPid` |
 | Apply safe disk | `SetDiskSafeThresholds { soft_pct, hard_pct }` |
 | Critical Guard | `SetCriticalGuard { enabled }` |
-| Critical Guard mode | `SetCriticalGuardMode { mode }` (`soft_only` \| `last_resort_suspend`) |
+| Critical Guard mode | `SetCriticalGuardMode { mode }` (`soft_only` default; `last_resort_suspend` only if `experimental_suspend`) |
 | Whitelist add/remove | `AddWhitelist` / `RemoveWhitelist` |
 
 Offline: show “Service offline — start guardian-service” banner; still render last status.json if present.

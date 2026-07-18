@@ -1,9 +1,11 @@
 # Unstick
 # https://github.com/Dendro-X0/Unstick
 
-Windows user-mode background guardian that keeps low-end desktops responsive under **dev builds, MCP load, and gaming** — with behavioral abuse / miner heuristics.
+**Windows-only** portable Guard that protects the OS drive (SSD/HDD) and RAM under pressure.  
+**v0.3:** Soft Disk/Mem Lock + EcoQoS. **Option 2 (D0–D5):** closed-loop hardware control — [design](specs/backend/hardware-control-redesign.md).
 
-See design: [specs/backend/guardian-design.md](specs/backend/guardian-design.md) · UI: [docs/frontend-spec.md](docs/frontend-spec.md)
+See: [specs/backend/guardian-design.md](specs/backend/guardian-design.md) · [docs/USER-GUIDE.md](docs/USER-GUIDE.md) · [docs/roadmap-next-release.md](docs/roadmap-next-release.md)
+
 
 ## Quick start
 

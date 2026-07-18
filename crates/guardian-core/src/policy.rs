@@ -257,6 +257,8 @@ pub struct PolicyEngine {
     pub protected: ProtectedSet,
     pub emergency_suspend: bool,
     pub critical_guard_mode: CriticalGuardMode,
+    /// D1: NtSuspend gated behind config.experimental_suspend.
+    pub experimental_suspend: bool,
     pub suspend_escalation_streak: u32,
     pub disk_lock_enabled: bool,
     pub mem_lock_enabled: bool,
@@ -270,6 +272,7 @@ impl PolicyEngine {
             protected: ProtectedSet::from_config(cfg, self_pid),
             emergency_suspend: cfg.emergency_suspend,
             critical_guard_mode: cfg.critical_guard_mode,
+            experimental_suspend: cfg.experimental_suspend,
             suspend_escalation_streak: cfg.suspend_escalation_streak.max(1),
             disk_lock_enabled: cfg.disk_lock_enabled,
             mem_lock_enabled: cfg.mem_lock_enabled,
@@ -429,6 +432,7 @@ impl PolicyEngine {
             || disk_lock == DiskLockMode::Hard
             || mem_lock == MemLockMode::Hard;
         let do_suspend = hard_pressure
+            && self.experimental_suspend
             && self.emergency_suspend
             && self.critical_guard_mode == CriticalGuardMode::LastResortSuspend
             && hard_pressure_streak >= self.suspend_escalation_streak
@@ -513,9 +517,42 @@ mod tests {
 
     fn last_resort_cfg() -> GuardianConfig {
         let mut cfg = GuardianConfig::default();
+        cfg.experimental_suspend = true;
         cfg.critical_guard_mode = CriticalGuardMode::LastResortSuspend;
         cfg.suspend_escalation_streak = 3;
         cfg
+    }
+
+    #[test]
+    fn suspend_blocked_without_experimental_flag() {
+        let mut cfg = last_resort_cfg();
+        cfg.experimental_suspend = false;
+        let engine = PolicyEngine::new(&cfg, 1);
+        let sample = sample_with(vec![ProcessSample {
+            pid: 300,
+            parent_pid: 0,
+            name: "hog.exe".into(),
+            path: None,
+            cpu_percent: 99.0,
+            memory_bytes: 0,
+            disk_read_bytes_per_sec: 0,
+            disk_write_bytes_per_sec: 50_000_000,
+            cmd_line: None,
+        }]);
+        let plan = engine.plan(
+            PressureBand::Emergency,
+            &sample,
+            Some("disk_busy_hard"),
+            DiskLockMode::Hard,
+            MemLockMode::Off,
+            10,
+            ThermalLevel::Nominal,
+        );
+        assert!(
+            plan.actions.iter().all(|a| a.level != ThrottleLevel::Suspend),
+            "Suspend must not plan without experimental_suspend: {:?}",
+            plan.actions
+        );
     }
 
     #[test]

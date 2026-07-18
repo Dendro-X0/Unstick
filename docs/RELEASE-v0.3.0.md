@@ -9,11 +9,11 @@
 
 ## Why 0.3.0
 
-Operational **smoothness**: align Soft remediation with Microsoft Efficiency Mode / EcoQoS and memory-priority guidance, cut Guard self-overhead further, and deepen honest DPC advisories—without fake “DPC cures” or standby purge.
+Better **disk/RAM protection** under pressure: Soft remediation follows Microsoft Efficiency Mode / EcoQoS and memory-priority guidance, Guard self-overhead drops further, DPC advisories stay honest — without fake “DPC cures,” standby purge, or “PC optimizer” scope creep.
 
 ### Highlights
 
-- **EcoQoS / Efficiency Mode** — Soft/Warn apply `ProcessPowerThrottling` (EcoQoS) via `SetProcessInformation`, not only BelowNormal/Idle class
+- **EcoQoS / Efficiency Mode** — Soft/Warn apply `ProcessPowerThrottling` so background work yields when Disk/Mem Lock need headroom
 - **ProcessMemoryPriority LOW** on Mem Lock Soft before Hard working-set shrink
 - **Hard WS shrink** only on Idle/Suspend Mem Lock ladder (Soft keeps L3 `EmptyWorkingSet` for proof)
 - **Normal-band sampling** — full process enum every other tick when idle (CPU/mem/PDH every tick)
@@ -22,7 +22,7 @@ Operational **smoothness**: align Soft remediation with Microsoft Efficiency Mod
 
 ### Unchanged
 
-- SoftOnly default; no standby/SysMain purge; no claimed DPC fix
+- SoftOnly default; Disk Lock + Mem Lock as the core job; no standby/SysMain purge; no claimed DPC fix
 - Mem Lock L4 paging gate; IDE/Defender protection; tray HARD toasts; event log
 
 ## Install / update
@@ -31,9 +31,10 @@ See USER-GUIDE **Updating (portable)**. Download `Unstick-0.3.0-windows-x64.zip`
 
 ## Limits
 
-- User-mode only; no MSI/Store yet  
+- **Windows only** — portable Guard for Windows x64; no macOS/Linux installers or packages  
+- **Protection utility, not a suite** — Disk Lock (SSD/HDD) + Mem Lock (RAM); not a general performance optimizer  
+- User-mode only; no Windows MSI/Store yet  
 - **Unsigned** binaries — SmartScreen may warn; public “production” channel waits on code signing  
-- Darwin QoS apply remains stubbed off macOS
 
 ## Proof
 
@@ -44,6 +45,6 @@ See USER-GUIDE **Updating (portable)**. Download `Unstick-0.3.0-windows-x64.zip`
 
 ## Next
 
-- Authenticode-signed public Latest  
-- Optional live Darwin QoS/App Nap apply on a macOS host  
-- MSI/MSIX if Store path is chosen later  
+- Authenticode-signed public Latest (still Windows portable protection utility)  
+- Optional Windows MSI/MSIX if a Store path is chosen later  
+

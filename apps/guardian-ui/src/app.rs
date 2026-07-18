@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use guardian_core::{
     load_config, read_recent_events, status_path, ApplyDeniedSummary, ClientRequest,
-    CriticalGuardMode, DiskLockMode, GuardianConfig, GuardianEvent, MemLockMode, PressureBand,
-    ServerPush, StatusSnapshot,
+    CriticalGuardMode, DiskControlMode, DiskLockMode, GuardianConfig, GuardianEvent, MemLockMode,
+    PressureBand, ServerPush, StatusSnapshot,
 };
 
 use crate::client;
@@ -57,6 +57,8 @@ pub struct UnstickApp {
     mem_hard_edit: f32,
     /// Guard secondary controls (Critical Guard, disk thresholds).
     controls_open: bool,
+    /// Soft/Hard % sliders (advanced).
+    advanced_open: bool,
     /// One-shot auto-expand when Disk Lock / suspend needs attention.
     controls_auto_armed: bool,
 }
@@ -187,6 +189,7 @@ impl UnstickApp {
             mem_soft_edit: 15.0,
             mem_hard_edit: 8.0,
             controls_open: false,
+            advanced_open: false,
             controls_auto_armed: false,
         };
         app.disk_soft_edit = app.config.disk_busy_soft_pct;
@@ -415,11 +418,21 @@ impl UnstickApp {
         let denied = status.map(|s| s.apply_denied.as_slice()).unwrap_or(&[]);
         let recovered = status.map(|s| s.recovered_suspends).unwrap_or(0);
         let tripwire = status.and_then(|s| s.tripwire.as_deref());
+        let disk_ctrl_mode = status
+            .map(|s| s.disk_control_mode)
+            .unwrap_or(DiskControlMode::Released);
+        let mem_ctrl_mode = status
+            .map(|s| s.mem_control_mode)
+            .unwrap_or(DiskControlMode::Released);
+        let controlling = disk_ctrl_mode != DiskControlMode::Released
+            || mem_ctrl_mode != DiskControlMode::Released;
         let warn_pulse = matches!(
             status.map(|s| s.pressure_band),
             Some(PressureBand::Warn | PressureBand::Throttle | PressureBand::Emergency)
         ) || disk_lock != DiskLockMode::Off
-            || mem_lock != MemLockMode::Off;
+            || mem_lock != MemLockMode::Off
+            || disk_ctrl_mode == DiskControlMode::Capping
+            || mem_ctrl_mode == DiskControlMode::Capping;
         let pulse = if warn_pulse {
             (self.pulse_t * 3.0).sin().abs()
         } else {
@@ -427,8 +440,10 @@ impl UnstickApp {
         };
 
         // Auto-expand Controls once when attention is needed; user may still collapse.
-        let needs_attention =
-            suspended_n > 0 || disk_lock != DiskLockMode::Off || mem_lock != MemLockMode::Off;
+        let needs_attention = suspended_n > 0
+            || disk_lock != DiskLockMode::Off
+            || mem_lock != MemLockMode::Off
+            || controlling;
         if needs_attention && !self.controls_auto_armed {
             self.controls_open = true;
             self.controls_auto_armed = true;
@@ -451,6 +466,8 @@ impl UnstickApp {
                     suspended_n,
                     disk_lock,
                     mem_lock,
+                    disk_ctrl_mode,
+                    mem_ctrl_mode,
                     denied,
                     recovered,
                     tripwire,
@@ -470,11 +487,15 @@ impl UnstickApp {
         suspended_n: usize,
         disk_lock: DiskLockMode,
         mem_lock: MemLockMode,
+        disk_ctrl_mode: DiskControlMode,
+        mem_ctrl_mode: DiskControlMode,
         denied: &[ApplyDeniedSummary],
         recovered: u32,
         tripwire: Option<&str>,
         pulse: f32,
     ) {
+        let controlling = disk_ctrl_mode != DiskControlMode::Released
+            || mem_ctrl_mode != DiskControlMode::Released;
         ui.vertical_centered(|ui| {
             // Vertically center the hero when Controls is collapsed.
             if !self.controls_open {
@@ -569,12 +590,46 @@ impl UnstickApp {
             }
 
             // Compact status chips in the first viewport (no long copy).
-            if suspended_n > 0 || disk_lock != DiskLockMode::Off || mem_lock != MemLockMode::Off {
+            if suspended_n > 0
+                || disk_lock != DiskLockMode::Off
+                || mem_lock != MemLockMode::Off
+                || controlling
+            {
                 ui.add_space(10.0);
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     if suspended_n > 0 {
                         widgets::status_chip(ui, format!("{suspended_n} suspended"), CORAL);
+                    }
+                    if disk_ctrl_mode != DiskControlMode::Released {
+                        let (label, color) = match disk_ctrl_mode {
+                            DiskControlMode::Capping => {
+                                let u = status.map(|s| s.envelope.u_disk).unwrap_or(0.0);
+                                let i = status.map(|s| s.disk_control_intensity).unwrap_or(0);
+                                (format!("Disk cap · i{i} · u {u:.2}"), CORAL)
+                            }
+                            DiskControlMode::Holding => {
+                                let i = status.map(|s| s.disk_control_intensity).unwrap_or(0);
+                                (format!("Disk hold · i{i}"), theme::AMBER)
+                            }
+                            DiskControlMode::Released => (String::new(), TEXT_DIM),
+                        };
+                        widgets::status_chip(ui, label, color);
+                    }
+                    if mem_ctrl_mode != DiskControlMode::Released {
+                        let (label, color) = match mem_ctrl_mode {
+                            DiskControlMode::Capping => {
+                                let u = status.map(|s| s.envelope.u_mem).unwrap_or(0.0);
+                                let i = status.map(|s| s.mem_control_intensity).unwrap_or(0);
+                                (format!("RAM cap · i{i} · u {u:.2}"), CORAL)
+                            }
+                            DiskControlMode::Holding => {
+                                let i = status.map(|s| s.mem_control_intensity).unwrap_or(0);
+                                (format!("RAM hold · i{i}"), theme::AMBER)
+                            }
+                            DiskControlMode::Released => (String::new(), TEXT_DIM),
+                        };
+                        widgets::status_chip(ui, label, color);
                     }
                     if disk_lock != DiskLockMode::Off {
                         let dl_color = match disk_lock {
@@ -583,20 +638,8 @@ impl UnstickApp {
                             DiskLockMode::Off => TEXT_DIM,
                         };
                         let dl_label = match disk_lock {
-                            DiskLockMode::Hard => {
-                                if let Some(s) = status {
-                                    format!("Disk Lock HARD · {:.0}%", s.disk_lock_hard_pct)
-                                } else {
-                                    "Disk Lock HARD".into()
-                                }
-                            }
-                            DiskLockMode::Soft => {
-                                if let Some(s) = status {
-                                    format!("Disk Lock SOFT · {:.0}%", s.disk_lock_soft_pct)
-                                } else {
-                                    "Disk Lock SOFT".into()
-                                }
-                            }
+                            DiskLockMode::Hard => "Disk Lock HARD".to_string(),
+                            DiskLockMode::Soft => "Disk Lock SOFT".to_string(),
                             DiskLockMode::Off => String::new(),
                         };
                         widgets::status_chip(ui, dl_label, dl_color);
@@ -608,20 +651,8 @@ impl UnstickApp {
                             MemLockMode::Off => TEXT_DIM,
                         };
                         let ml_label = match mem_lock {
-                            MemLockMode::Hard => {
-                                if let Some(s) = status {
-                                    format!("Mem Lock HARD · {:.0}%", s.mem_lock_hard_pct)
-                                } else {
-                                    "Mem Lock HARD".into()
-                                }
-                            }
-                            MemLockMode::Soft => {
-                                if let Some(s) = status {
-                                    format!("Mem Lock SOFT · {:.0}%", s.mem_lock_soft_pct)
-                                } else {
-                                    "Mem Lock SOFT".into()
-                                }
-                            }
+                            MemLockMode::Hard => "Mem Lock HARD".to_string(),
+                            MemLockMode::Soft => "Mem Lock SOFT".to_string(),
                             MemLockMode::Off => String::new(),
                         };
                         widgets::status_chip(ui, ml_label, ml_color);
@@ -694,7 +725,7 @@ impl UnstickApp {
                         if ui
                             .checkbox(
                                 &mut on,
-                                egui::RichText::new("Critical Guard")
+                                egui::RichText::new("Hardware Guard")
                                     .size(13.0)
                                     .strong()
                                     .color(if critical_on { TEAL } else { TEXT_DIM }),
@@ -727,6 +758,9 @@ impl UnstickApp {
                         let mode = status
                             .map(|s| s.critical_guard_mode)
                             .unwrap_or(CriticalGuardMode::SoftOnly);
+                        let experimental = status
+                            .map(|s| s.experimental_suspend)
+                            .unwrap_or(false);
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new("Mode")
@@ -746,28 +780,34 @@ impl UnstickApp {
                                     mode: CriticalGuardMode::SoftOnly,
                                 });
                             }
-                            ui.add_space(4.0);
-                            let last_sel = mode == CriticalGuardMode::LastResortSuspend;
-                            let last = ui.selectable_label(
-                                last_sel,
-                                egui::RichText::new("Last-resort pause")
-                                    .size(12.0)
-                                    .color(if last_sel { CORAL } else { TEXT_DIM }),
-                            );
-                            if last.clicked() && !last_sel {
-                                let _ = self.cmd_tx.send(ClientRequest::SetCriticalGuardMode {
-                                    mode: CriticalGuardMode::LastResortSuspend,
-                                });
+                            if experimental {
+                                ui.add_space(4.0);
+                                let last_sel = mode == CriticalGuardMode::LastResortSuspend;
+                                let last = ui.selectable_label(
+                                    last_sel,
+                                    egui::RichText::new("Last-resort pause")
+                                        .size(12.0)
+                                        .color(if last_sel { CORAL } else { TEXT_DIM }),
+                                );
+                                if last.clicked() && !last_sel {
+                                    let _ = self.cmd_tx.send(ClientRequest::SetCriticalGuardMode {
+                                        mode: CriticalGuardMode::LastResortSuspend,
+                                    });
+                                }
                             }
                         });
                         ui.label(
-                            egui::RichText::new(match mode {
+                            egui::RichText::new(if experimental {
+                                match mode {
                                 CriticalGuardMode::SoftOnly => {
-                                    "Default: ease background work without pausing processes."
+                                    "Default: closed-loop soft control for disk/RAM — never pauses processes."
                                 }
-                                CriticalGuardMode::LastResortSuspend => {
-                                    "After sustained emergency pressure, pause top offenders (never the focused app)."
+                                    CriticalGuardMode::LastResortSuspend => {
+                                        "Experimental: after sustained emergency, pause top offenders (never the focused app)."
+                                    }
                                 }
+                            } else {
+                                "Soft only (product default). NtSuspend is off unless you set experimental_suspend=true in config.json."
                             })
                             .size(11.0)
                             .color(TEXT_DIM),
@@ -776,107 +816,180 @@ impl UnstickApp {
 
                     ui.add_space(12.0);
                     ui.label(
-                        egui::RichText::new("Safe disk usage")
+                        egui::RichText::new("Hardware control")
                             .size(13.0)
                             .strong()
                             .color(TEXT),
                     );
                     ui.label(theme::dim(
-                        "Soft: limit offender I/O at this Active Time %. Hard: pause top disk processes.",
+                        "Holds OS disk and RAM just under the freeze cliff (~97–99%). Soft actuators only — never pauses apps by default.",
                     ));
                     ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Soft").color(TEXT_DIM));
-                        ui.add(
-                            egui::Slider::new(&mut self.disk_soft_edit, 50.0..=98.0).suffix("%"),
+                    if let Some(s) = status {
+                        let env = &s.envelope;
+                        let calib = if env.calibrated {
+                            "calibrated"
+                        } else {
+                            "learning idle…"
+                        };
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Envelope · {calib} · idle samples {}",
+                                env.idle_samples
+                            ))
+                            .size(12.0)
+                            .color(if env.calibrated { TEAL } else { TEXT_DIM }),
                         );
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Hard").color(TEXT_DIM));
-                        ui.add(
-                            egui::Slider::new(&mut self.disk_hard_edit, 55.0..=100.0).suffix("%"),
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Disk  u {:.2}  ·  set {:.2}–{:.2}  ·  {} i{}",
+                                env.u_disk,
+                                env.u_set_lo,
+                                env.u_set_hi,
+                                s.disk_control_mode.as_str(),
+                                s.disk_control_intensity
+                            ))
+                            .size(12.0)
+                            .color(TEXT),
                         );
-                    });
-                    if self.disk_hard_edit <= self.disk_soft_edit {
-                        self.disk_hard_edit = (self.disk_soft_edit + 1.0).min(100.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "RAM   u {:.2}  ·  set {:.2}–{:.2}  ·  {} i{}",
+                                env.u_mem,
+                                env.u_set_lo,
+                                env.u_set_hi,
+                                s.mem_control_mode.as_str(),
+                                s.mem_control_intensity
+                            ))
+                            .size(12.0)
+                            .color(TEXT),
+                        );
+                    } else {
+                        ui.label(theme::dim("Waiting for service status…"));
                     }
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        if ui
-                            .button(egui::RichText::new("Apply thresholds").color(TEAL))
-                            .clicked()
-                        {
-                            let soft = self.disk_soft_edit;
-                            let hard = self.disk_hard_edit.max(soft + 1.0);
-                            self.config.disk_busy_soft_pct = soft;
-                            self.config.disk_busy_hard_pct = hard;
-                            let _ = self.cmd_tx.send(ClientRequest::SetDiskSafeThresholds {
-                                soft_pct: soft,
-                                hard_pct: hard,
-                            });
-                        }
-                        ui.add_space(8.0);
-                        if ui.small_button("85 / 95").clicked() {
-                            self.disk_soft_edit = 85.0;
-                            self.disk_hard_edit = 95.0;
-                        }
-                        if ui.small_button("70 / 90").clicked() {
-                            self.disk_soft_edit = 70.0;
-                            self.disk_hard_edit = 90.0;
-                        }
-                    });
 
                     ui.add_space(12.0);
-                    ui.label(
-                        egui::RichText::new("Safe available RAM")
-                            .size(13.0)
-                            .strong()
-                            .color(TEXT),
-                    );
-                    ui.label(theme::dim(
-                        "Soft: trim background working sets below this available %. Hard: deeper trim (Suspend only in Last resort).",
-                    ));
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Soft").color(TEXT_DIM));
-                        ui.add(
-                            egui::Slider::new(&mut self.mem_soft_edit, 5.0..=40.0).suffix("%"),
-                        );
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Hard").color(TEXT_DIM));
-                        ui.add(
-                            egui::Slider::new(&mut self.mem_hard_edit, 2.0..=35.0).suffix("%"),
-                        );
-                    });
-                    if self.mem_hard_edit >= self.mem_soft_edit {
-                        self.mem_hard_edit = (self.mem_soft_edit - 0.5).max(2.0);
+                    let adv_label = if self.advanced_open {
+                        "Advanced thresholds ▾"
+                    } else {
+                        "Advanced thresholds ▸"
+                    };
+                    if ui
+                        .selectable_label(
+                            false,
+                            egui::RichText::new(adv_label).size(12.0).color(TEXT_DIM),
+                        )
+                        .clicked()
+                    {
+                        self.advanced_open = !self.advanced_open;
                     }
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        if ui
-                            .button(egui::RichText::new("Apply RAM thresholds").color(TEAL))
-                            .clicked()
-                        {
-                            let soft = self.mem_soft_edit;
-                            let hard = self.mem_hard_edit.min(soft - 0.5).max(2.0);
-                            self.config.mem_avail_soft_pct = soft;
-                            self.config.mem_avail_hard_pct = hard;
-                            let _ = self.cmd_tx.send(ClientRequest::SetMemSafeThresholds {
-                                soft_pct: soft,
-                                hard_pct: hard,
-                            });
-                        }
+
+                    if self.advanced_open {
                         ui.add_space(8.0);
-                        if ui.small_button("15 / 8").clicked() {
-                            self.mem_soft_edit = 15.0;
-                            self.mem_hard_edit = 8.0;
+                        ui.label(
+                            egui::RichText::new("Legacy Soft / Hard tripwires")
+                                .size(12.0)
+                                .strong()
+                                .color(TEXT_DIM),
+                        );
+                        ui.label(theme::dim(
+                            "Optional safety net alongside closed-loop control. Soft = start limiting; Hard = deeper limit (no Suspend unless experimental).",
+                        ));
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new("Safe disk usage (Active Time %)")
+                                .size(12.0)
+                                .color(TEXT),
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Soft").color(TEXT_DIM));
+                            ui.add(
+                                egui::Slider::new(&mut self.disk_soft_edit, 50.0..=98.0)
+                                    .suffix("%"),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Hard").color(TEXT_DIM));
+                            ui.add(
+                                egui::Slider::new(&mut self.disk_hard_edit, 55.0..=100.0)
+                                    .suffix("%"),
+                            );
+                        });
+                        if self.disk_hard_edit <= self.disk_soft_edit {
+                            self.disk_hard_edit = (self.disk_soft_edit + 1.0).min(100.0);
                         }
-                        if ui.small_button("20 / 10").clicked() {
-                            self.mem_soft_edit = 20.0;
-                            self.mem_hard_edit = 10.0;
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button(egui::RichText::new("Apply disk").color(TEAL))
+                                .clicked()
+                            {
+                                let soft = self.disk_soft_edit;
+                                let hard = self.disk_hard_edit.max(soft + 1.0);
+                                self.config.disk_busy_soft_pct = soft;
+                                self.config.disk_busy_hard_pct = hard;
+                                let _ = self.cmd_tx.send(ClientRequest::SetDiskSafeThresholds {
+                                    soft_pct: soft,
+                                    hard_pct: hard,
+                                });
+                            }
+                            if ui.small_button("85 / 95").clicked() {
+                                self.disk_soft_edit = 85.0;
+                                self.disk_hard_edit = 95.0;
+                            }
+                            if ui.small_button("70 / 90").clicked() {
+                                self.disk_soft_edit = 70.0;
+                                self.disk_hard_edit = 90.0;
+                            }
+                        });
+
+                        ui.add_space(10.0);
+                        ui.label(
+                            egui::RichText::new("Safe available RAM %")
+                                .size(12.0)
+                                .color(TEXT),
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Soft").color(TEXT_DIM));
+                            ui.add(
+                                egui::Slider::new(&mut self.mem_soft_edit, 5.0..=40.0).suffix("%"),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Hard").color(TEXT_DIM));
+                            ui.add(
+                                egui::Slider::new(&mut self.mem_hard_edit, 2.0..=35.0).suffix("%"),
+                            );
+                        });
+                        if self.mem_hard_edit >= self.mem_soft_edit {
+                            self.mem_hard_edit = (self.mem_soft_edit - 0.5).max(2.0);
                         }
-                    });
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button(egui::RichText::new("Apply RAM").color(TEAL))
+                                .clicked()
+                            {
+                                let soft = self.mem_soft_edit;
+                                let hard = self.mem_hard_edit.min(soft - 0.5).max(2.0);
+                                self.config.mem_avail_soft_pct = soft;
+                                self.config.mem_avail_hard_pct = hard;
+                                let _ = self.cmd_tx.send(ClientRequest::SetMemSafeThresholds {
+                                    soft_pct: soft,
+                                    hard_pct: hard,
+                                });
+                            }
+                            if ui.small_button("15 / 8").clicked() {
+                                self.mem_soft_edit = 15.0;
+                                self.mem_hard_edit = 8.0;
+                            }
+                            if ui.small_button("20 / 10").clicked() {
+                                self.mem_soft_edit = 20.0;
+                                self.mem_hard_edit = 10.0;
+                            }
+                        });
+                    }
                 });
             });
         });

@@ -109,11 +109,20 @@ pub struct ApplyOutcome {
     pub denied: Vec<(u32, String, String)>,
 }
 
+/// Soft demotion state so EcoQoS / mem-priority can be restored when a PID leaves the plan.
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+struct AppliedState {
+    level: ThrottleLevel,
+    ecoqos: bool,
+    mem_prio: bool,
+}
+
 pub struct ThrottleExecutor {
     #[cfg(windows)]
     jobs: HashMap<u32, usize>,
     job_cpu_rate_percent: u32,
-    applied: HashMap<u32, ThrottleLevel>,
+    applied: HashMap<u32, AppliedState>,
     /// Currently AboveNormal-boosted foreground PID.
     boosted_pid: Option<u32>,
     pub ledger: SuspendLedger,
@@ -273,7 +282,14 @@ impl ThrottleExecutor {
             }
             match self.apply_one(action) {
                 Ok(()) => {
-                    self.applied.insert(action.pid, action.level);
+                    self.applied.insert(
+                        action.pid,
+                        AppliedState {
+                            level: action.level,
+                            ecoqos: action.apply_ecoqos,
+                            mem_prio: action.apply_mem_priority_low,
+                        },
+                    );
                     if action.level == ThrottleLevel::Suspend {
                         self.ledger.insert(
                             action.pid,
@@ -332,6 +348,23 @@ impl ThrottleExecutor {
         }
         self.applied.clear();
         self.persist_ledger();
+    }
+
+    /// Restore soft demotions (EcoQoS / mem-prio / priority) for PIDs no longer in the plan.
+    /// Suspended PIDs stay on the suspend ledger until explicit resume.
+    pub fn restore_not_in_plan(&mut self, plan_pids: &std::collections::HashSet<u32>) {
+        let stale: Vec<u32> = self
+            .applied
+            .keys()
+            .copied()
+            .filter(|p| !plan_pids.contains(p) && !self.ledger.contains(*p))
+            .collect();
+        for pid in stale {
+            match self.restore_pid(pid) {
+                Ok(()) => debug!(pid, "restored soft demotion (left plan)"),
+                Err(e) => warn!(pid, error = %e, "soft restore failed — will retry"),
+            }
+        }
     }
 
     pub fn restore_missing(&mut self, live_pids: &[u32]) {
@@ -542,8 +575,9 @@ impl ThrottleExecutor {
     #[cfg(windows)]
     fn restore_pid(&mut self, pid: u32) -> anyhow::Result<()> {
         if self.ledger.contains(pid) {
-            let _ = self.resume_one(pid);
+            self.resume_one(pid)?;
             self.ledger.remove(pid);
+            self.arm_suspend_cooldown(pid);
         }
         unsafe {
             let handle =
