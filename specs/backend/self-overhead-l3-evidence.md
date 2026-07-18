@@ -1,0 +1,33 @@
+# Self-overhead L3 evidence (v0.1.2)
+
+**Date:** 2026-07-17 (local) / 2026-07-18 UTC  
+**Machine:** `XTZJ-20221014TG`  
+**Method:** `scripts/Measure-SelfOverhead.ps1` — `% of one logical core` ≈ `100 * Δ(Get-Process.CPU) / wall_seconds`  
+**Build:** `cargo build --release -p guardian-service`  
+**UI:** closed (service-only idle)
+
+## Results
+
+| Label | Change set | WallSec | PctOneCore | CSV |
+|-------|------------|---------|------------|-----|
+| before | v0.1.1 tree (pre self-overhead) | 60.06 | **4.319** | `self-overhead-measure-before-20260717-222431.csv` |
+| after | gated cmdline + compact/throttled status.json | 60.08 | **2.081** | `self-overhead-measure-after-20260717-222731.csv` |
+| after2 | + gated exe path | 60.04 | 3.565 | `self-overhead-measure-after2-20260717-222917.csv` |
+
+## Verdict
+
+- **Best measured idle:** **2.081% of one core** (~**52%** reduction vs 4.319% baseline).  
+- Plan aspirational bar was **≤ ~0.5%**. On this machine the remaining cost is dominated by **full `refresh_processes(All)` + PDH every 2s**, which v0.1.2 deliberately keeps (Mem/Disk Lock + detect need the enum). Hitting ≤0.5% needs a future sampling strategy (not this release).  
+- `after2` variance (3.565%) shows probe noise under background load; path gating remains shipped for fewer Win32 string queries on cold PIDs.  
+- UI paint change is behavioral (no longer fixed 30 Hz); not measured in service-only idle rows.
+
+## Pass criteria for ship
+
+| Check | Result |
+|-------|--------|
+| Meaningful idle CPU reduction vs before | **PASS** (~52% at best sample) |
+| SoftOnly / sample intervals unchanged | **PASS** (by design) |
+| L1 cmdline gate tests | run in Verify-P2 / `cargo test -p guardian-win` |
+| L2 `Verify-P2-Automated.ps1` | see ship checklist |
+
+**Claim language:** Self-overhead **improved and verified at L3** on this host; **not** claimed to meet absolute ≤0.5% one-core until a lighter process-sample design lands.

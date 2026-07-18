@@ -183,7 +183,6 @@ impl eframe::App for UnstickApp {
             self.rounded_applied = true;
         }
 
-        ctx.request_repaint_after(Duration::from_millis(33));
         self.pulse_t = (self.pulse_t + ctx.input(|i| i.stable_dt)) % 1000.0;
 
         chrome::title_bar(ctx);
@@ -199,6 +198,7 @@ impl eframe::App for UnstickApp {
             )
         };
 
+        let mut gauge_targets = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
         if let Some(s) = &status {
             let ram = if s.memory_total_bytes > 0 {
                 1.0 - (s.memory_available_bytes as f32 / s.memory_total_bytes as f32)
@@ -209,10 +209,16 @@ impl eframe::App for UnstickApp {
                 .push_sample(s.cpu_percent, s.disk_busy_percent);
             let t = 0.18;
             let t_seg = 0.28;
-            self.cpu_disp = lerp(self.cpu_disp, s.cpu_percent / 100.0, t);
-            self.ram_disp = lerp(self.ram_disp, ram, t);
-            self.disk_disp = lerp(self.disk_disp, s.disk_busy_percent / 100.0, t);
-            self.pressure_disp = lerp(self.pressure_disp, s.pressure_score, t);
+            gauge_targets = (
+                s.cpu_percent / 100.0,
+                ram,
+                s.disk_busy_percent / 100.0,
+                s.pressure_score,
+            );
+            self.cpu_disp = lerp(self.cpu_disp, gauge_targets.0, t);
+            self.ram_disp = lerp(self.ram_disp, gauge_targets.1, t);
+            self.disk_disp = lerp(self.disk_disp, gauge_targets.2, t);
+            self.pressure_disp = lerp(self.pressure_disp, gauge_targets.3, t);
             self.cpu_lit = lerp(self.cpu_lit, self.cpu_disp * GAUGE_SEGMENTS, t_seg);
             self.ram_lit = lerp(self.ram_lit, self.ram_disp * GAUGE_SEGMENTS, t_seg);
             self.disk_lit = lerp(self.disk_lit, self.disk_disp * GAUGE_SEGMENTS, t_seg);
@@ -222,6 +228,25 @@ impl eframe::App for UnstickApp {
                 t_seg,
             );
         }
+
+        // v0.1.2: ~1 Hz when settled; ~15 Hz only while lerping / interacting.
+        let interacting = ctx.input(|i| i.pointer.any_down() || i.any_touches() || !i.keys_down.is_empty());
+        let settled = status.as_ref().map_or(true, |_| {
+            (self.cpu_disp - gauge_targets.0).abs() < 0.005
+                && (self.ram_disp - gauge_targets.1).abs() < 0.005
+                && (self.disk_disp - gauge_targets.2).abs() < 0.005
+                && (self.pressure_disp - gauge_targets.3).abs() < 0.005
+                && (self.cpu_lit - self.cpu_disp * GAUGE_SEGMENTS).abs() < 0.05
+                && (self.ram_lit - self.ram_disp * GAUGE_SEGMENTS).abs() < 0.05
+                && (self.disk_lit - self.disk_disp * GAUGE_SEGMENTS).abs() < 0.05
+                && (self.pressure_lit - self.pressure_disp * GAUGE_SEGMENTS).abs() < 0.05
+        });
+        let repaint_ms = if interacting || toast.is_some() || !settled {
+            66
+        } else {
+            1000
+        };
+        ctx.request_repaint_after(Duration::from_millis(repaint_ms));
 
         egui::TopBottomPanel::top("header")
             .frame(

@@ -104,7 +104,6 @@ impl WinSensor {
         for (pid, proc) in self.sys.processes() {
             let pid_u = pid.as_u32();
             let name = proc.name().to_string_lossy().to_string();
-            let path = proc.exe().map(|p| p.to_string_lossy().to_string());
             let cpu_percent = proc.cpu_usage();
             let memory_bytes = proc.memory();
             let parent_pid = proc.parent().map(|p| p.as_u32()).unwrap_or(0);
@@ -124,7 +123,16 @@ impl WinSensor {
                 .insert(pid_u, (read_total, write_total, now));
             agg_io = agg_io.saturating_add(rps.saturating_add(wps));
 
-            let cmd_line = {
+            let disk_bps = rps.saturating_add(wps);
+            // Path only when detect/policy may need it (hot, script host, miner-ish, or warm CPU).
+            let path = if need_exe_path(&name, cpu_percent, disk_bps) {
+                proc.exe().map(|p| p.to_string_lossy().to_string())
+            } else {
+                None
+            };
+            // v0.1.2: skip expensive cmd() for quiet processes; detect still
+            // sees cmdline for script hosts / hot / miner-ish names.
+            let cmd_line = if need_cmdline(&name, cpu_percent, disk_bps) {
                 let args: Vec<String> = proc
                     .cmd()
                     .iter()
@@ -135,6 +143,8 @@ impl WinSensor {
                 } else {
                     Some(args.join(" "))
                 }
+            } else {
+                None
             };
 
             processes.push(ProcessSample {
@@ -260,6 +270,60 @@ impl WinSensor {
 impl Default for WinSensor {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// When true, `sample()` reads process command lines (expensive on Windows).
+fn need_cmdline(name: &str, cpu_percent: f32, disk_bps: u64) -> bool {
+    const SCRIPT_HOSTS: &[&str] = &[
+        "wscript.exe",
+        "cscript.exe",
+        "mshta.exe",
+        "powershell.exe",
+    ];
+    const MINER_NAME_TOKENS: &[&str] =
+        &["xmrig", "minerd", "cpuminer", "nicehash", "monero"];
+    let lower = name.to_lowercase();
+    if SCRIPT_HOSTS.iter().any(|h| lower == *h) {
+        return true;
+    }
+    if cpu_percent >= 50.0 {
+        return true;
+    }
+    if disk_bps >= 200_000 {
+        return true;
+    }
+    MINER_NAME_TOKENS.iter().any(|t| lower.contains(t))
+}
+
+/// Exe path for whitelist / suspicious_path; skip for cold quiet processes.
+fn need_exe_path(name: &str, cpu_percent: f32, disk_bps: u64) -> bool {
+    need_cmdline(name, cpu_percent, disk_bps) || cpu_percent >= 8.0
+}
+
+#[cfg(test)]
+mod cmdline_gate_tests {
+    use super::need_cmdline;
+
+    #[test]
+    fn quiet_app_skips_cmdline() {
+        assert!(!need_cmdline("notepad.exe", 2.0, 0));
+    }
+
+    #[test]
+    fn script_host_always() {
+        assert!(need_cmdline("powershell.exe", 1.0, 0));
+    }
+
+    #[test]
+    fn hot_cpu_or_disk() {
+        assert!(need_cmdline("chrome.exe", 55.0, 0));
+        assert!(need_cmdline("chrome.exe", 1.0, 250_000));
+    }
+
+    #[test]
+    fn minerish_name() {
+        assert!(need_cmdline("xmrig.exe", 1.0, 0));
     }
 }
 

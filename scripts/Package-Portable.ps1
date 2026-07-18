@@ -50,14 +50,21 @@ foreach ($d in $Docs) {
 
 Copy-Item -Force (Join-Path $Root "scripts\Install-Autostart.ps1") $Dist -ErrorAction SilentlyContinue
 Copy-Item -Force (Join-Path $Root "scripts\Uninstall-Autostart.ps1") $Dist -ErrorAction SilentlyContinue
-if (Test-Path (Join-Path $Root "docs\RELEASE-v0.1.1.md")) {
-    Copy-Item -Force (Join-Path $Root "docs\RELEASE-v0.1.1.md") (Join-Path $Dist "RELEASE-NOTES.md")
-} elseif (Test-Path (Join-Path $Root "docs\RELEASE-v0.1.0.md")) {
-    Copy-Item -Force (Join-Path $Root "docs\RELEASE-v0.1.0.md") (Join-Path $Dist "RELEASE-NOTES.md")
+$releaseNotes = @(
+    "docs\RELEASE-v0.1.2.md",
+    "docs\RELEASE-v0.1.1.md",
+    "docs\RELEASE-v0.1.0.md"
+) | ForEach-Object { Join-Path $Root $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($releaseNotes) {
+    Copy-Item -Force $releaseNotes (Join-Path $Dist "RELEASE-NOTES.md")
 }
 
-# Versioned zip next to dist/
-$Ver = "0.1.1"
+# Versioned zip next to dist/ (workspace.package.version)
+$Ver = "0.1.2"
+$cargoToml = Get-Content (Join-Path $Root "Cargo.toml") -Raw
+if ($cargoToml -match '(?m)^version\s*=\s*"([^"]+)"') {
+    $Ver = $Matches[1]
+}
 $ZipName = "Unstick-$Ver-windows-x64.zip"
 $ZipPath = Join-Path $Root $ZipName
 if (Test-Path $ZipPath) { Remove-Item -Force $ZipPath }

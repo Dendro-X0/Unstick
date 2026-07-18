@@ -75,6 +75,8 @@ pub struct ServiceInner {
     pub dpc_elevated_streak: u32,
     pub last_dpc_advisory_at: Option<Instant>,
     pub last_thermal_advisory_at: Option<Instant>,
+    /// Last time `status.json` was written (throttled on Normal).
+    pub last_status_write: Option<Instant>,
 }
 
 impl ServiceInner {
@@ -109,6 +111,7 @@ impl ServiceInner {
             dpc_elevated_streak: 0,
             last_dpc_advisory_at: None,
             last_thermal_advisory_at: None,
+            last_status_write: None,
         })
     }
 
@@ -775,8 +778,22 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
         recovered_suspends: g.recovered_suspends,
     };
 
-    if let Ok(raw) = serde_json::to_string_pretty(&status) {
-        let _ = fs::write(status_path(), raw);
+    // Compact JSON; throttle disk write on Normal (IPC always uses last_status).
+    let should_write = match g.last_status_write {
+        None => true,
+        Some(t) => {
+            let busy = matches!(
+                pressure.band,
+                PressureBand::Warn | PressureBand::Throttle | PressureBand::Emergency
+            );
+            busy || t.elapsed() >= Duration::from_millis(1000)
+        }
+    };
+    if should_write {
+        if let Ok(raw) = serde_json::to_string(&status) {
+            let _ = fs::write(status_path(), raw);
+            g.last_status_write = Some(Instant::now());
+        }
     }
 
     g.last_status = Some(status);
