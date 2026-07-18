@@ -1,8 +1,9 @@
-# Unstick v0.1.0 — release notes (draft)
+# Unstick v0.1.0 — release notes
 
-**Channel:** private / unsigned beta (code signing deferred)  
+**Channel:** public portable release (unsigned binaries; code signing deferred)  
 **Surface:** Portable `dist/` + optional HKCU autostart  
-**Version:** `0.1.0` (Cargo workspace)
+**Version:** `0.1.0` (Cargo workspace)  
+**GitHub:** https://github.com/Dendro-X0/Unstick/releases/tag/v0.1.0
 
 ---
 
@@ -18,7 +19,7 @@
 
 ## Install (portable)
 
-1. Unzip the release folder (or build: `pwsh -File scripts/Package-Portable.ps1`)
+1. Download `Unstick-0.1.0-windows-x64.zip` from the GitHub release (or build: `pwsh -File scripts/Package-Portable.ps1`)
 2. Run `guardian-service.exe`, then `guardian-ui.exe`
 3. Optional autostart: `pwsh -File Install-Autostart.ps1 -StartNow`
 4. Read `USER-GUIDE.md` in the package
@@ -30,7 +31,7 @@
 - DPC/ISR stutter is detect-only (cannot fix bad drivers)
 - No MSI/Store yet (v0.2); unsigned binaries — Windows SmartScreen may warn
 
-## Proof snapshot (pre-tag)
+## Proof snapshot
 
 | Gate | Status |
 |------|--------|
@@ -38,10 +39,8 @@
 | P2-1 automated verify | Local script available |
 | P2-2 Disk Lock L3 | Probe PASS 2026-07-17 |
 | P2-3 L4 decoy | PASS 2026-07-17 |
-| P2-4 2h false-positive | **Coding-phase PASS 2026-07-17** (60m probe; gaming hour optional) |
+| P2-4 false-positive | **PASS 2026-07-17** (60m coding-phase probe; gaming hour optional) |
 | Mem Lock L3 | PASS |
-
-**Do not publish a public `v0.1.0` tag until P2-4 is signed** (or explicitly label the build `v0.1.0-beta` / private).
 
 ## Verify locally
 
@@ -49,11 +48,11 @@
 powershell -File scripts/Verify-P2-Automated.ps1
 powershell -File scripts/Verify-DiskLock-L3.ps1
 powershell -File scripts/Verify-P2-L4-Decoy.ps1
+powershell -File scripts/Verify-P2-4-FalsePositive.ps1
 powershell -File scripts/Verify-MemLock-L3.ps1
 powershell -File scripts/Package-Portable.ps1
 ```
 
 ## Next
 
-- Sign P2-4 → tag `v0.1.0` → GitHub Release with zip  
 - `v0.2`: Mem Lock L4, installer, code signing — see [roadmap-next-release.md](roadmap-next-release.md)
