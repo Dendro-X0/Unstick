@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use chrono::Utc;
-use guardian_core::{ProcessSample, SystemSample};
+use guardian_core::{
+    classify_thermal_power, CoolingMode, ProcessSample, SystemSample, ThermalPowerInputs,
+};
 use sysinfo::{Disks, ProcessesToUpdate, System};
 use tracing::{debug, warn};
 
@@ -15,6 +17,10 @@ pub struct WinSensor {
     prev_agg_io: Option<(u64, Instant)>,
     #[cfg(windows)]
     pdh: Option<PdhDiskCounters>,
+    #[cfg(windows)]
+    pdh_mem: Option<PdhMemoryCounters>,
+    #[cfg(windows)]
+    pdh_cpu: Option<PdhCpuCounters>,
 }
 
 impl WinSensor {
@@ -34,6 +40,28 @@ impl WinSensor {
                 None
             }
         };
+        #[cfg(windows)]
+        let pdh_mem = match PdhMemoryCounters::open() {
+            Ok(p) => {
+                debug!("PDH memory/paging counters ready");
+                Some(p)
+            }
+            Err(e) => {
+                warn!(error = %e, "PDH memory counters unavailable");
+                None
+            }
+        };
+        #[cfg(windows)]
+        let pdh_cpu = match PdhCpuCounters::open() {
+            Ok(p) => {
+                debug!("PDH DPC/interrupt counters ready");
+                Some(p)
+            }
+            Err(e) => {
+                warn!(error = %e, "PDH DPC/interrupt counters unavailable");
+                None
+            }
+        };
         Self {
             sys,
             disks,
@@ -43,6 +71,10 @@ impl WinSensor {
             prev_agg_io: None,
             #[cfg(windows)]
             pdh,
+            #[cfg(windows)]
+            pdh_mem,
+            #[cfg(windows)]
+            pdh_cpu,
         }
     }
 
@@ -132,17 +164,60 @@ impl WinSensor {
             estimate_disk(&self.disks, &self.sys, agg_io, &mut self.prev_agg_io, now);
 
         #[cfg(windows)]
-        let (disk_busy_percent, disk_queue_length) = {
+        let (disk_busy_percent, disk_queue_length, disk_latency_sec) = {
             let pdh_vals = self.pdh.as_mut().and_then(|p| p.read());
             match pdh_vals {
-                Some((busy, queue)) => (busy, queue),
-                None => (est_busy, est_queue),
+                Some((busy, queue, latency)) => (busy, queue, latency),
+                None => (est_busy, est_queue, 0.0),
             }
         };
         #[cfg(not(windows))]
-        let (disk_busy_percent, disk_queue_length) = (est_busy, est_queue);
+        let (disk_busy_percent, disk_queue_length, disk_latency_sec) = (est_busy, est_queue, 0.0);
 
-        let hard_faults_per_sec = self.estimate_hard_faults(now);
+        let hard_faults_per_sec;
+        let pagefile_writes_per_sec;
+        let paging_file_pct;
+        #[cfg(windows)]
+        {
+            if let Some((pages, writes, pf_pct)) = self.pdh_mem.as_mut().and_then(|p| p.read()) {
+                hard_faults_per_sec = pages;
+                pagefile_writes_per_sec = writes;
+                paging_file_pct = pf_pct;
+            } else {
+                hard_faults_per_sec = self.estimate_hard_faults(now);
+                pagefile_writes_per_sec = 0.0;
+                paging_file_pct = 0.0;
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            hard_faults_per_sec = self.estimate_hard_faults(now);
+            pagefile_writes_per_sec = 0.0;
+            paging_file_pct = 0.0;
+        }
+
+        let (dpc_time_percent, interrupt_time_percent) = {
+            #[cfg(windows)]
+            {
+                self.pdh_cpu
+                    .as_mut()
+                    .and_then(|p| p.read())
+                    .unwrap_or((0.0, 0.0))
+            }
+            #[cfg(not(windows))]
+            {
+                (0.0, 0.0)
+            }
+        };
+
+        let (on_battery, battery_percent, cooling_mode, cpu_mhz_ratio) = sample_power_thermal();
+        let thermal_level = classify_thermal_power(&ThermalPowerInputs {
+            on_battery,
+            battery_percent,
+            cooling: cooling_mode,
+            cpu_mhz_ratio,
+        });
+        let focus_pid = sample_focus_pid();
 
         SystemSample {
             timestamp: Utc::now(),
@@ -152,8 +227,19 @@ impl WinSensor {
             memory_commit_percent,
             disk_busy_percent,
             disk_queue_length,
+            disk_latency_sec,
             disk_io_bytes_per_sec: agg_io,
             hard_faults_per_sec,
+            pagefile_writes_per_sec,
+            paging_file_pct,
+            dpc_time_percent,
+            interrupt_time_percent,
+            on_battery,
+            battery_percent,
+            cooling_mode,
+            cpu_mhz_ratio,
+            thermal_level,
+            focus_pid,
             processes,
         }
     }
@@ -230,6 +316,104 @@ fn estimate_disk(
 }
 
 #[cfg(windows)]
+fn sample_power_thermal() -> (bool, Option<u8>, CoolingMode, f32) {
+    use windows::Win32::System::Power::{
+        CallNtPowerInformation, GetSystemPowerStatus, ProcessorInformation, SystemPowerInformation,
+        PROCESSOR_POWER_INFORMATION, SYSTEM_POWER_INFORMATION, SYSTEM_POWER_STATUS,
+    };
+    use windows::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
+
+    let mut on_battery = false;
+    let mut battery_percent = None;
+    unsafe {
+        let mut status = SYSTEM_POWER_STATUS::default();
+        if GetSystemPowerStatus(&mut status).is_ok() {
+            on_battery = status.ACLineStatus == 0;
+            if status.BatteryLifePercent <= 100 {
+                battery_percent = Some(status.BatteryLifePercent);
+            }
+        }
+    }
+
+    let cooling_mode = unsafe {
+        let mut info = SYSTEM_POWER_INFORMATION::default();
+        let status = CallNtPowerInformation(
+            SystemPowerInformation,
+            None,
+            0,
+            Some(&mut info as *mut _ as *mut _),
+            std::mem::size_of::<SYSTEM_POWER_INFORMATION>() as u32,
+        );
+        if status.is_ok() {
+            CoolingMode::from_po_tz(info.CoolingMode.0 as u8)
+        } else {
+            CoolingMode::Unknown
+        }
+    };
+
+    let cpu_mhz_ratio = unsafe {
+        let mut sys = SYSTEM_INFO::default();
+        GetSystemInfo(&mut sys);
+        let n = sys.dwNumberOfProcessors.max(1) as usize;
+        let mut buf = vec![PROCESSOR_POWER_INFORMATION::default(); n];
+        let status = CallNtPowerInformation(
+            ProcessorInformation,
+            None,
+            0,
+            Some(buf.as_mut_ptr() as *mut _),
+            (std::mem::size_of::<PROCESSOR_POWER_INFORMATION>() * n) as u32,
+        );
+        if status.is_ok() {
+            let mut sum = 0.0f32;
+            let mut count = 0u32;
+            for p in &buf {
+                if p.MaxMhz > 0 {
+                    sum += (p.CurrentMhz as f32 / p.MaxMhz as f32).clamp(0.0, 1.0);
+                    count += 1;
+                }
+            }
+            if count > 0 {
+                sum / count as f32
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        }
+    };
+
+    (on_battery, battery_percent, cooling_mode, cpu_mhz_ratio)
+}
+
+#[cfg(not(windows))]
+fn sample_power_thermal() -> (bool, Option<u8>, CoolingMode, f32) {
+    (false, None, CoolingMode::Unknown, 0.0)
+}
+
+#[cfg(windows)]
+fn sample_focus_pid() -> Option<u32> {
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.0.is_null() {
+            return None;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 {
+            None
+        } else {
+            Some(pid)
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn sample_focus_pid() -> Option<u32> {
+    None
+}
+
+#[cfg(windows)]
 fn commit_percent() -> Option<f32> {
     use windows::Win32::System::ProcessStatus::{GetPerformanceInfo, PERFORMANCE_INFORMATION};
     unsafe {
@@ -256,12 +440,245 @@ fn page_fault_count() -> Option<u64> {
     None
 }
 
-/// PDH counters for system PhysicalDisk Active Time (~ Task Manager) + queue.
+/// PDH Processor(_Total) % DPC Time and % Interrupt Time (detect-only advisory).
+#[cfg(windows)]
+struct PdhCpuCounters {
+    query: isize,
+    dpc_counter: isize,
+    interrupt_counter: isize,
+    primed: bool,
+}
+
+#[cfg(windows)]
+impl PdhCpuCounters {
+    fn open() -> anyhow::Result<Self> {
+        use std::ffi::CString;
+        use windows::core::PCSTR;
+        use windows::Win32::System::Performance::{
+            PdhAddEnglishCounterA, PdhCollectQueryData, PdhOpenQueryA,
+        };
+
+        unsafe {
+            let mut query = 0isize;
+            let status = PdhOpenQueryA(PCSTR::null(), 0, &mut query);
+            if status != 0 {
+                anyhow::bail!("PdhOpenQueryA cpu {status:#x}");
+            }
+
+            let dpc_path = CString::new(r"\Processor(_Total)\% DPC Time").unwrap();
+            let irq_path = CString::new(r"\Processor(_Total)\% Interrupt Time").unwrap();
+
+            let mut dpc_counter = 0isize;
+            let mut interrupt_counter = 0isize;
+            let s1 = PdhAddEnglishCounterA(
+                query,
+                PCSTR::from_raw(dpc_path.as_ptr() as *const u8),
+                0,
+                &mut dpc_counter,
+            );
+            let s2 = PdhAddEnglishCounterA(
+                query,
+                PCSTR::from_raw(irq_path.as_ptr() as *const u8),
+                0,
+                &mut interrupt_counter,
+            );
+            if s1 != 0 || s2 != 0 {
+                anyhow::bail!("PdhAddEnglishCounter dpc={s1:#x} interrupt={s2:#x}");
+            }
+
+            let _ = PdhCollectQueryData(query);
+            Ok(Self {
+                query,
+                dpc_counter,
+                interrupt_counter,
+                primed: false,
+            })
+        }
+    }
+
+    fn read(&mut self) -> Option<(f32, f32)> {
+        use windows::Win32::System::Performance::{
+            PdhCollectQueryData, PdhGetFormattedCounterValue, PDH_FMT_COUNTERVALUE, PDH_FMT_DOUBLE,
+        };
+
+        unsafe {
+            let status = PdhCollectQueryData(self.query);
+            if status != 0 {
+                return None;
+            }
+            if !self.primed {
+                self.primed = true;
+                return None;
+            }
+
+            let mut dpc_val = PDH_FMT_COUNTERVALUE::default();
+            let mut irq_val = PDH_FMT_COUNTERVALUE::default();
+            let s1 = PdhGetFormattedCounterValue(
+                self.dpc_counter,
+                PDH_FMT_DOUBLE,
+                None,
+                &mut dpc_val,
+            );
+            let s2 = PdhGetFormattedCounterValue(
+                self.interrupt_counter,
+                PDH_FMT_DOUBLE,
+                None,
+                &mut irq_val,
+            );
+            if s1 != 0 || s2 != 0 {
+                return None;
+            }
+
+            let dpc = (dpc_val.Anonymous.doubleValue as f32).clamp(0.0, 100.0);
+            let irq = (irq_val.Anonymous.doubleValue as f32).clamp(0.0, 100.0);
+            Some((dpc, irq))
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for PdhCpuCounters {
+    fn drop(&mut self) {
+        use windows::Win32::System::Performance::PdhCloseQuery;
+        unsafe {
+            let _ = PdhCloseQuery(self.query);
+        }
+    }
+}
+
+/// PDH Memory\Pages/sec, Page Writes/sec, and Paging File % Usage.
+#[cfg(windows)]
+struct PdhMemoryCounters {
+    query: isize,
+    pages_counter: isize,
+    writes_counter: isize,
+    paging_file_counter: isize,
+    primed: bool,
+}
+
+#[cfg(windows)]
+impl PdhMemoryCounters {
+    fn open() -> anyhow::Result<Self> {
+        use std::ffi::CString;
+        use windows::core::PCSTR;
+        use windows::Win32::System::Performance::{
+            PdhAddEnglishCounterA, PdhCollectQueryData, PdhOpenQueryA,
+        };
+
+        unsafe {
+            let mut query = 0isize;
+            let status = PdhOpenQueryA(PCSTR::null(), 0, &mut query);
+            if status != 0 {
+                anyhow::bail!("PdhOpenQueryA memory {status:#x}");
+            }
+
+            let pages_path = CString::new(r"\Memory\Pages/sec").unwrap();
+            let writes_path = CString::new(r"\Memory\Page Writes/sec").unwrap();
+            let pf_path = CString::new(r"\Paging File(_Total)\% Usage").unwrap();
+
+            let mut pages_counter = 0isize;
+            let mut writes_counter = 0isize;
+            let mut paging_file_counter = 0isize;
+            let s1 = PdhAddEnglishCounterA(
+                query,
+                PCSTR::from_raw(pages_path.as_ptr() as *const u8),
+                0,
+                &mut pages_counter,
+            );
+            let s2 = PdhAddEnglishCounterA(
+                query,
+                PCSTR::from_raw(writes_path.as_ptr() as *const u8),
+                0,
+                &mut writes_counter,
+            );
+            let s3 = PdhAddEnglishCounterA(
+                query,
+                PCSTR::from_raw(pf_path.as_ptr() as *const u8),
+                0,
+                &mut paging_file_counter,
+            );
+            if s1 != 0 || s2 != 0 || s3 != 0 {
+                anyhow::bail!(
+                    "PdhAddEnglishCounter pages={s1:#x} writes={s2:#x} paging_file={s3:#x}"
+                );
+            }
+
+            let _ = PdhCollectQueryData(query);
+            Ok(Self {
+                query,
+                pages_counter,
+                writes_counter,
+                paging_file_counter,
+                primed: false,
+            })
+        }
+    }
+
+    fn read(&mut self) -> Option<(f32, f32, f32)> {
+        use windows::Win32::System::Performance::{
+            PdhCollectQueryData, PdhGetFormattedCounterValue, PDH_FMT_COUNTERVALUE, PDH_FMT_DOUBLE,
+        };
+
+        unsafe {
+            let status = PdhCollectQueryData(self.query);
+            if status != 0 {
+                return None;
+            }
+            if !self.primed {
+                self.primed = true;
+                return None;
+            }
+
+            let mut pages_val = PDH_FMT_COUNTERVALUE::default();
+            let mut writes_val = PDH_FMT_COUNTERVALUE::default();
+            let mut pf_val = PDH_FMT_COUNTERVALUE::default();
+            let s1 = PdhGetFormattedCounterValue(
+                self.pages_counter,
+                PDH_FMT_DOUBLE,
+                None,
+                &mut pages_val,
+            );
+            let s2 = PdhGetFormattedCounterValue(
+                self.writes_counter,
+                PDH_FMT_DOUBLE,
+                None,
+                &mut writes_val,
+            );
+            let s3 = PdhGetFormattedCounterValue(
+                self.paging_file_counter,
+                PDH_FMT_DOUBLE,
+                None,
+                &mut pf_val,
+            );
+            if s1 != 0 || s2 != 0 || s3 != 0 {
+                return None;
+            }
+
+            let pages = (pages_val.Anonymous.doubleValue as f32).clamp(0.0, 1_000_000.0);
+            let writes = (writes_val.Anonymous.doubleValue as f32).clamp(0.0, 1_000_000.0);
+            let pf_pct = (pf_val.Anonymous.doubleValue as f32).clamp(0.0, 100.0);
+            Some((pages, writes, pf_pct))
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for PdhMemoryCounters {
+    fn drop(&mut self) {
+        use windows::Win32::System::Performance::PdhCloseQuery;
+        unsafe {
+            let _ = PdhCloseQuery(self.query);
+        }
+    }
+}
+
+/// PDH counters for system PhysicalDisk Active Time, queue, and transfer latency.
 #[cfg(windows)]
 struct PdhDiskCounters {
     query: isize,
     idle_counter: isize,
     queue_counter: isize,
+    latency_counter: isize,
     primed: bool,
 }
 
@@ -289,9 +706,13 @@ impl PdhDiskCounters {
             let queue_path =
                 CString::new(format!(r"\PhysicalDisk({instance})\Avg. Disk Queue Length"))
                     .unwrap();
+            let latency_path =
+                CString::new(format!(r"\PhysicalDisk({instance})\Avg. Disk sec/Transfer"))
+                    .unwrap();
 
             let mut idle_counter = 0isize;
             let mut queue_counter = 0isize;
+            let mut latency_counter = 0isize;
             let s1 = PdhAddEnglishCounterA(
                 query,
                 PCSTR::from_raw(idle_path.as_ptr() as *const u8),
@@ -304,8 +725,14 @@ impl PdhDiskCounters {
                 0,
                 &mut queue_counter,
             );
-            if s1 != 0 || s2 != 0 {
-                anyhow::bail!("PdhAddEnglishCounter idle={s1:#x} queue={s2:#x}");
+            let s3 = PdhAddEnglishCounterA(
+                query,
+                PCSTR::from_raw(latency_path.as_ptr() as *const u8),
+                0,
+                &mut latency_counter,
+            );
+            if s1 != 0 || s2 != 0 || s3 != 0 {
+                anyhow::bail!("PdhAddEnglishCounter idle={s1:#x} queue={s2:#x} latency={s3:#x}");
             }
 
             let _ = PdhCollectQueryData(query);
@@ -314,12 +741,13 @@ impl PdhDiskCounters {
                 query,
                 idle_counter,
                 queue_counter,
+                latency_counter,
                 primed: false,
             })
         }
     }
 
-    fn read(&mut self) -> Option<(f32, f32)> {
+    fn read(&mut self) -> Option<(f32, f32, f32)> {
         use windows::Win32::System::Performance::{
             PdhCollectQueryData, PdhGetFormattedCounterValue, PDH_FMT_COUNTERVALUE, PDH_FMT_DOUBLE,
         };
@@ -336,6 +764,7 @@ impl PdhDiskCounters {
 
             let mut idle_val = PDH_FMT_COUNTERVALUE::default();
             let mut queue_val = PDH_FMT_COUNTERVALUE::default();
+            let mut latency_val = PDH_FMT_COUNTERVALUE::default();
             let s1 = PdhGetFormattedCounterValue(
                 self.idle_counter,
                 PDH_FMT_DOUBLE,
@@ -348,14 +777,21 @@ impl PdhDiskCounters {
                 None,
                 &mut queue_val,
             );
-            if s1 != 0 || s2 != 0 {
+            let s3 = PdhGetFormattedCounterValue(
+                self.latency_counter,
+                PDH_FMT_DOUBLE,
+                None,
+                &mut latency_val,
+            );
+            if s1 != 0 || s2 != 0 || s3 != 0 {
                 return None;
             }
 
             let idle = idle_val.Anonymous.doubleValue as f32;
             let queue = queue_val.Anonymous.doubleValue as f32;
+            let latency = (latency_val.Anonymous.doubleValue as f32).clamp(0.0, 30.0);
             let busy = (100.0 - idle).clamp(0.0, 100.0);
-            Some((busy, queue.clamp(0.0, 64.0)))
+            Some((busy, queue.clamp(0.0, 64.0), latency))
         }
     }
 }

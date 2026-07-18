@@ -1,13 +1,13 @@
 # Unstick — start here
 
 1. Design: [specs/backend/guardian-design.md](../specs/backend/guardian-design.md)
-2. **v0.1 roadmap:** [roadmap-v0.1.md](roadmap-v0.1.md)
+2. **Roadmaps:** [next release](roadmap-next-release.md) · [v0.1 detail](roadmap-v0.1.md) · [v0.1.0 release draft](RELEASE-v0.1.0.md)
 3. **User guide:** [USER-GUIDE.md](USER-GUIDE.md)
 4. UI: [frontend-spec.md](frontend-spec.md)
-5. Build / package (Windows):
-   - `pwsh -File scripts/Package-Portable.ps1`
-   - or `cargo build --release -p guardian-service -p guardian-ui`
-6. Run service, then client:
+5. Dev loop:
+   - `pnpm install` then `pnpm dev` (builds debug + starts service & UI)
+   - or release: `pnpm build` / `pwsh -File scripts/Package-Portable.ps1`
+6. Run packaged binaries (after package):
    - `dist/guardian-service.exe`
    - `dist/guardian-ui.exe`
    - `guardian-tray.exe --cli` — console status (optional)

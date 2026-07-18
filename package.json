@@ -1,0 +1,17 @@
+{
+  "name": "unstick",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unstick — Windows freeze-prevention guardian (Rust monorepo)",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "postinstall": "node -e \"require('fs').mkdirSync('node_modules/.bin',{recursive:true})\"",
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "cargo test -p guardian-core -p guardian-detect",
+    "package": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Package-Portable.ps1"
+  }
+}

@@ -25,6 +25,8 @@ pub struct DiskCalibrator {
     enabled: bool,
     adaptive: bool,
     persist: bool,
+    soft_latency_sec: f32,
+    hard_latency_sec: f32,
     /// Last computed thresholds.
     live: DiskLockThresholds,
     last_saturation: f32,
@@ -71,6 +73,11 @@ impl DiskCalibrator {
             enabled: cfg.disk_lock_enabled,
             adaptive: cfg.disk_lock_adaptive,
             persist: false,
+            soft_latency_sec: cfg.disk_latency_soft_sec.clamp(0.001, 1.0),
+            hard_latency_sec: cfg
+                .disk_latency_hard_sec
+                .max(cfg.disk_latency_soft_sec + 0.001)
+                .clamp(0.002, 2.0),
             live: DiskLockThresholds::from_config(cfg),
             last_saturation: 0.0,
         };
@@ -86,6 +93,11 @@ impl DiskCalibrator {
             .disk_busy_hard_pct
             .clamp(self.prior_soft + 1.0, 100.0);
         self.streak = cfg.disk_busy_streak.max(1);
+        self.soft_latency_sec = cfg.disk_latency_soft_sec.clamp(0.001, 1.0);
+        self.hard_latency_sec = cfg
+            .disk_latency_hard_sec
+            .max(cfg.disk_latency_soft_sec + 0.001)
+            .clamp(0.002, 2.0);
         self.recompute();
     }
 
@@ -174,6 +186,8 @@ impl DiskCalibrator {
                 hard_pct: hard,
                 soft_queue: 4.0,
                 hard_queue: 8.0,
+                soft_latency_sec: self.soft_latency_sec,
+                hard_latency_sec: self.hard_latency_sec,
                 streak: self.streak,
                 calibrated: false,
                 peak_io_bps: self.peak_io_bps,
@@ -199,6 +213,8 @@ impl DiskCalibrator {
             hard_pct: hard,
             soft_queue: soft_q,
             hard_queue: hard_q,
+            soft_latency_sec: self.soft_latency_sec,
+            hard_latency_sec: self.hard_latency_sec,
             streak: self.streak,
             calibrated: primed,
             peak_io_bps: self.peak_io_bps,

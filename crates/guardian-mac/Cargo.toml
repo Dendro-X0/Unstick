@@ -1,0 +1,9 @@
+[package]
+name = "guardian-mac"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Darwin QoS / App Nap apply stubs for Unstick"
+
+[dependencies]
+guardian-core = { workspace = true }

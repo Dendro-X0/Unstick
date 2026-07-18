@@ -24,7 +24,7 @@
 | `disk_busy_hard_pct` | 95 | **User safe hard** — pause/suspend top disk offenders |
 | `disk_busy_streak` | 2 | Consecutive samples required |
 
-Busy% triggers are always the user/config values. Adaptive mode only tunes queue thresholds.
+Busy% triggers are always the user/config values. Adaptive mode only tunes queue thresholds. Latency soft/hard (15ms / 40ms) are fixed config defaults — see `disk-latency-tripwire-design.md`.
 
 IPC: `SetDiskSafeThresholds { soft_pct, hard_pct }` — Guard UI sliders + Apply.
 

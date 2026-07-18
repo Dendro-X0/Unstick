@@ -1869,6 +1869,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "guardian-mac"
+version = "0.1.0"
+dependencies = [
+ "guardian-core",
+]
+
+[[package]]
 name = "guardian-service"
 version = "0.1.0"
 dependencies = [

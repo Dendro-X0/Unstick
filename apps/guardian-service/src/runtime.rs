@@ -6,10 +6,12 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use chrono::Utc;
 use guardian_core::{
-    events_path, load_config, save_config, score_pressure_tracked, status_path, ActionPlan,
-    ApplyDeniedSummary, ClientRequest, DiskCalibrator, DiskLockMode, GuardianConfig, GuardianEvent,
-    HysteresisTracker, PressureBand, PressureInputs, PressureState, ServerPush, StatusSnapshot,
-    SuspendedSummary, ThrottleLevel, AbuseSummary, ThrottleSummary,
+    classify_dpc_isr, classify_focus_profile, dpc_advisory_message, dpc_isr_raw_level,
+    events_path, load_config, save_config, score_pressure_tracked, status_path,
+    thermal_advisory_message, ActionPlan, ApplyDeniedSummary, ClientRequest, CriticalGuardMode,
+    DiskCalibrator, DiskLockMode, GuardianConfig, GuardianEvent, HysteresisTracker, MemLockMode,
+    MemLockThresholds, PressureBand, PressureInputs, PressureState, ServerPush, StatusSnapshot,
+    SuspendedSummary, ThrottleLevel, AbuseSummary, ThrottleSummary, plan_qos,
 };
 use guardian_detect::{apply_parent_anomaly, AbuseDetector};
 use guardian_win::{elevation_likely, ThrottleExecutor, WinSensor};
@@ -67,6 +69,12 @@ pub struct ServiceInner {
     pub last_sample: Option<guardian_core::SystemSample>,
     pub apply_denied: Vec<ApplyDeniedSummary>,
     pub recovered_suspends: u32,
+    /// Consecutive samples at Emergency or Disk Lock Hard (for last-resort Suspend).
+    pub hard_pressure_streak: u32,
+    /// Consecutive samples with elevated DPC/ISR (detect-only).
+    pub dpc_elevated_streak: u32,
+    pub last_dpc_advisory_at: Option<Instant>,
+    pub last_thermal_advisory_at: Option<Instant>,
 }
 
 impl ServiceInner {
@@ -97,6 +105,10 @@ impl ServiceInner {
             last_sample: None,
             apply_denied: Vec::new(),
             recovered_suspends: recovered_n,
+            hard_pressure_streak: 0,
+            dpc_elevated_streak: 0,
+            last_dpc_advisory_at: None,
+            last_thermal_advisory_at: None,
         })
     }
 
@@ -281,6 +293,35 @@ impl ServiceInner {
                     message: format!("critical_guard={enabled}"),
                 }
             }
+            ClientRequest::SetCriticalGuardMode { mode } => {
+                {
+                    let mut cfg = self.cfg.write().await;
+                    cfg.critical_guard_mode = mode;
+                    if mode == CriticalGuardMode::LastResortSuspend && !cfg.emergency_suspend {
+                        cfg.emergency_suspend = true;
+                    }
+                    let _ = save_config(&cfg);
+                }
+                if mode == CriticalGuardMode::SoftOnly {
+                    for (pid, name, reason) in
+                        self.throttle.resume_all_suspended("soft_only_mode")
+                    {
+                        self.push_event(GuardianEvent::Resume {
+                            pid,
+                            name,
+                            reason,
+                            at: Utc::now(),
+                        });
+                    }
+                }
+                self.push_event(GuardianEvent::Info {
+                    message: format!("Critical Guard mode={}", mode.as_str()),
+                    at: Utc::now(),
+                });
+                ServerPush::Ok {
+                    message: format!("critical_guard_mode={}", mode.as_str()),
+                }
+            }
             ClientRequest::SetDiskSafeThresholds { soft_pct, hard_pct } => {
                 let soft = soft_pct.clamp(50.0, 99.0);
                 let hard = hard_pct.clamp(soft + 1.0, 100.0);
@@ -297,6 +338,23 @@ impl ServiceInner {
                 });
                 ServerPush::Ok {
                     message: format!("Disk safe: soft {soft:.0}% · hard {hard:.0}%"),
+                }
+            }
+            ClientRequest::SetMemSafeThresholds { soft_pct, hard_pct } => {
+                let soft = soft_pct.clamp(5.0, 40.0);
+                let hard = hard_pct.clamp(2.0, soft - 0.5);
+                {
+                    let mut cfg = self.cfg.write().await;
+                    cfg.mem_avail_soft_pct = soft;
+                    cfg.mem_avail_hard_pct = hard;
+                    let _ = save_config(&cfg);
+                }
+                self.push_event(GuardianEvent::Info {
+                    message: format!("safe mem soft={soft:.0}% hard={hard:.0}% available"),
+                    at: Utc::now(),
+                });
+                ServerPush::Ok {
+                    message: format!("RAM safe: soft {soft:.0}% · hard {hard:.0}% avail"),
                 }
             }
         }
@@ -357,15 +415,27 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
         memory_commit_percent: sample.memory_commit_percent,
         disk_busy_percent: sample.disk_busy_percent,
         disk_queue_length: sample.disk_queue_length,
+        disk_latency_sec: sample.disk_latency_sec,
         hard_faults_per_sec: sample.hard_faults_per_sec,
+        pagefile_writes_per_sec: sample.pagefile_writes_per_sec,
+        paging_file_pct: sample.paging_file_pct,
+        dpc_time_percent: sample.dpc_time_percent,
+        interrupt_time_percent: sample.interrupt_time_percent,
+        thermal_some: sample.thermal_level.thermal_some(),
     };
     let disk_thr = g.disk_cal.observe(
         sample.disk_busy_percent,
         sample.disk_queue_length,
         sample.disk_io_bytes_per_sec,
     );
-    let pressure: PressureState =
-        score_pressure_tracked(&inputs, g.ema, &mut g.hysteresis, Some(&disk_thr));
+    let mem_thr = MemLockThresholds::from_config(&cfg);
+    let pressure: PressureState = score_pressure_tracked(
+        &inputs,
+        g.ema,
+        &mut g.hysteresis,
+        Some(&disk_thr),
+        Some(&mem_thr),
+    );
     g.ema = Some(pressure.score);
 
     if pressure.band != g.last_band {
@@ -408,6 +478,65 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
         })
         .collect();
 
+    let hard_pressure = matches!(pressure.band, PressureBand::Emergency)
+        || pressure.disk_lock == DiskLockMode::Hard
+        || pressure.mem_lock == MemLockMode::Hard;
+    if hard_pressure && !paused {
+        g.hard_pressure_streak = g.hard_pressure_streak.saturating_add(1);
+    } else {
+        g.hard_pressure_streak = 0;
+    }
+
+    // Detect-only DPC/ISR advisory — never drives throttle/suspend.
+    let dpc_raw = dpc_isr_raw_level(sample.dpc_time_percent, sample.interrupt_time_percent);
+    if dpc_raw != guardian_core::DpcAdvisoryLevel::None {
+        g.dpc_elevated_streak = g.dpc_elevated_streak.saturating_add(1);
+    } else {
+        g.dpc_elevated_streak = 0;
+    }
+    let dpc_level = classify_dpc_isr(
+        sample.dpc_time_percent,
+        sample.interrupt_time_percent,
+        g.dpc_elevated_streak,
+        3,
+    );
+    let dpc_advisory = dpc_advisory_message(dpc_level).map(|s| s.to_string());
+    if dpc_level == guardian_core::DpcAdvisoryLevel::High {
+        let should_emit = match g.last_dpc_advisory_at {
+            Some(t) => t.elapsed() >= Duration::from_secs(300),
+            None => true,
+        };
+        if should_emit {
+            if let Some(msg) = dpc_advisory_message(dpc_level) {
+                g.push_event(GuardianEvent::Info {
+                    message: msg.into(),
+                    at: Utc::now(),
+                });
+                g.last_dpc_advisory_at = Some(Instant::now());
+            }
+        }
+    }
+
+    let thermal_advisory = thermal_advisory_message(sample.thermal_level).map(|s| s.to_string());
+    if matches!(
+        sample.thermal_level,
+        guardian_core::ThermalLevel::Fair | guardian_core::ThermalLevel::Serious
+    ) {
+        let should_emit = match g.last_thermal_advisory_at {
+            Some(t) => t.elapsed() >= Duration::from_secs(300),
+            None => true,
+        };
+        if should_emit {
+            if let Some(msg) = thermal_advisory_message(sample.thermal_level) {
+                g.push_event(GuardianEvent::Info {
+                    message: msg.into(),
+                    at: Utc::now(),
+                });
+                g.last_thermal_advisory_at = Some(Instant::now());
+            }
+        }
+    }
+
     let engine = guardian_core::PolicyEngine::new(&cfg, g.policy_self_pid);
     let mut plan = if paused {
         ActionPlan::default()
@@ -417,6 +546,9 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
             &sample,
             pressure.tripwire,
             pressure.disk_lock,
+            pressure.mem_lock,
+            g.hard_pressure_streak,
+            sample.thermal_level,
         )
     };
 
@@ -433,6 +565,7 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
                     level: ThrottleLevel::BelowNormal,
                     apply_job_cap: false,
                     apply_disk_lock: false,
+                    apply_mem_lock: false,
                     reason: format!("abuse:{}", hit.score),
                 });
             }
@@ -467,74 +600,84 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
 
     if pressure.band == PressureBand::Normal
         && pressure.disk_lock == DiskLockMode::Off
+        && pressure.mem_lock == MemLockMode::Off
         && !paused
     {
         g.throttle.restore_all();
         g.recent_throttles.clear();
         g.apply_denied.clear();
-    } else if !plan.actions.is_empty() && !paused {
-        let outcome = g.throttle.apply(&plan.actions);
-        g.apply_denied = outcome
-            .denied
-            .iter()
-            .map(|(pid, name, err)| ApplyDeniedSummary {
-                pid: *pid,
-                name: name.clone(),
-                error: err.clone(),
-                elevation_likely: elevation_likely(err),
-            })
-            .collect();
-        if !g.apply_denied.is_empty() {
-            let elev = g.apply_denied.iter().filter(|d| d.elevation_likely).count();
-            if elev > 0 {
-                g.push_event(GuardianEvent::Info {
-                    message: format!(
-                        "{elev} process(es) blocked (likely need admin / elevated target)"
-                    ),
-                    at: Utc::now(),
-                });
-            }
+    } else if paused {
+        g.throttle.clear_boost();
+    } else {
+        if plan.boost_foreground {
+            g.throttle.boost_foreground(sample.focus_pid);
+        } else {
+            g.throttle.clear_boost();
         }
-        g.recent_throttles = outcome
-            .applied
-            .iter()
-            .map(|(pid, level, reason)| ThrottleSummary {
-                pid: *pid,
-                name: plan
-                    .actions
-                    .iter()
-                    .find(|a| a.pid == *pid)
-                    .map(|a| a.name.clone())
-                    .unwrap_or_default(),
-                level: *level,
-                reason: reason.clone(),
-            })
-            .collect();
-
-        let throttle_events: Vec<GuardianEvent> = g
-            .recent_throttles
-            .iter()
-            .map(|t| {
-                if t.level == ThrottleLevel::Suspend {
-                    GuardianEvent::Suspend {
-                        pid: t.pid,
-                        name: t.name.clone(),
-                        reason: t.reason.clone(),
+        if !plan.actions.is_empty() {
+            let outcome = g.throttle.apply(&plan.actions);
+            g.apply_denied = outcome
+                .denied
+                .iter()
+                .map(|(pid, name, err)| ApplyDeniedSummary {
+                    pid: *pid,
+                    name: name.clone(),
+                    error: err.clone(),
+                    elevation_likely: elevation_likely(err),
+                })
+                .collect();
+            if !g.apply_denied.is_empty() {
+                let elev = g.apply_denied.iter().filter(|d| d.elevation_likely).count();
+                if elev > 0 {
+                    g.push_event(GuardianEvent::Info {
+                        message: format!(
+                            "{elev} process(es) blocked (likely need admin / elevated target)"
+                        ),
                         at: Utc::now(),
-                    }
-                } else {
-                    GuardianEvent::Throttle {
-                        pid: t.pid,
-                        name: t.name.clone(),
-                        level: t.level,
-                        reason: t.reason.clone(),
-                        at: Utc::now(),
-                    }
+                    });
                 }
-            })
-            .collect();
-        for ev in throttle_events {
-            g.push_event(ev);
+            }
+            g.recent_throttles = outcome
+                .applied
+                .iter()
+                .map(|(pid, level, reason)| ThrottleSummary {
+                    pid: *pid,
+                    name: plan
+                        .actions
+                        .iter()
+                        .find(|a| a.pid == *pid)
+                        .map(|a| a.name.clone())
+                        .unwrap_or_default(),
+                    level: *level,
+                    reason: reason.clone(),
+                })
+                .collect();
+
+            let throttle_events: Vec<GuardianEvent> = g
+                .recent_throttles
+                .iter()
+                .map(|t| {
+                    if t.level == ThrottleLevel::Suspend {
+                        GuardianEvent::Suspend {
+                            pid: t.pid,
+                            name: t.name.clone(),
+                            reason: t.reason.clone(),
+                            at: Utc::now(),
+                        }
+                    } else {
+                        GuardianEvent::Throttle {
+                            pid: t.pid,
+                            name: t.name.clone(),
+                            level: t.level,
+                            reason: t.reason.clone(),
+                            at: Utc::now(),
+                        }
+                    }
+                })
+                .collect();
+            for ev in throttle_events {
+                g.push_event(ev);
+            }
         }
     }
 
@@ -555,10 +698,35 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
         .collect();
 
     let top: Vec<_> = sample.processes.iter().take(10).cloned().collect();
+    let focus_proc = sample
+        .focus_pid
+        .and_then(|fp| sample.processes.iter().find(|p| p.pid == fp));
+    let focus_name = focus_proc.map(|p| p.name.clone());
+    let focus_profile = classify_focus_profile(focus_proc);
+    let qos = if paused {
+        plan_qos(
+            cfg.critical_guard_mode,
+            PressureBand::Normal,
+            DiskLockMode::Off,
+            MemLockMode::Off,
+            focus_profile,
+            sample.thermal_level,
+            false,
+        )
+    } else {
+        plan.qos
+    };
     let status = StatusSnapshot {
         paused,
         pause_until_unix: cfg.pause_until.map(|t| t.timestamp()),
         critical_guard: cfg.emergency_suspend,
+        critical_guard_mode: cfg.critical_guard_mode,
+        focus_pid: sample.focus_pid,
+        focus_name,
+        focus_profile,
+        focus_qos: qos.focus,
+        background_qos: qos.background,
+        nap_policy: qos.nap,
         pressure_score: pressure.score,
         pressure_band: pressure.band,
         tripwire: pressure.tripwire.map(|s| s.to_string()),
@@ -569,11 +737,33 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
         disk_lock_adaptive: cfg.disk_lock_adaptive,
         disk_saturation: disk_thr.saturation,
         disk_peak_io_bps: disk_thr.peak_io_bps,
+        mem_lock: pressure.mem_lock,
+        mem_lock_soft_pct: mem_thr.avail_soft_pct,
+        mem_lock_hard_pct: mem_thr.avail_hard_pct,
         cpu_percent: sample.cpu_percent,
         memory_available_bytes: sample.memory_available_bytes,
         memory_total_bytes: sample.memory_total_bytes,
         disk_busy_percent: sample.disk_busy_percent,
         disk_queue_length: sample.disk_queue_length,
+        disk_latency_sec: sample.disk_latency_sec,
+        hard_faults_per_sec: sample.hard_faults_per_sec,
+        pagefile_writes_per_sec: sample.pagefile_writes_per_sec,
+        paging_file_pct: sample.paging_file_pct,
+        dpc_time_percent: sample.dpc_time_percent,
+        interrupt_time_percent: sample.interrupt_time_percent,
+        dpc_advisory,
+        stall_cpu: pressure.stalls.cpu_some,
+        stall_memory: pressure.stalls.memory_some,
+        stall_io: pressure.stalls.io_some,
+        stall_memory_full: pressure.stalls.memory_full,
+        stall_io_full: pressure.stalls.io_full,
+        stall_thermal: pressure.stalls.thermal_some,
+        on_battery: sample.on_battery,
+        battery_percent: sample.battery_percent,
+        cooling_mode: sample.cooling_mode,
+        cpu_mhz_ratio: sample.cpu_mhz_ratio,
+        thermal_level: sample.thermal_level,
+        thermal_advisory,
         top_processes: top,
         recent_throttles: g.recent_throttles.clone(),
         recent_abuse: g.recent_abuse.clone(),

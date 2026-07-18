@@ -15,9 +15,22 @@ v0.1 is production-ready when:
 2. A service crash/kill **cannot** leave processes permanently suspended.
 3. Soak on DRAM-less SATA boot SSD shows fewer multi-minute freezes under build/MCP load.
 4. CI builds + unit tests are green on every push.
-5. Release notes list known limits (no kernel IOPS cap, no Mem Lock yet, heuristics ≠ AV).
+5. Release notes list known limits (no kernel IOPS cap, heuristics ≠ AV; Mem Lock is present — see notes).
 
 ---
+
+## Before tagging `v0.1.0` (launch blockers)
+
+See **[roadmap-next-release.md](roadmap-next-release.md)** for the full next-release plan.
+
+| Gate | Work | Status |
+|------|------|--------|
+| P2-2 | Disk Lock L3 soak | **Probe PASS 2026-07-17** (TM ±15% optional) |
+| P2-3 | L4 decoy / whitelist safety | **PASS 2026-07-17** |
+| P2-4 | 2h false-positive pass | **Ready** (manual — last blocker) |
+| Ship | Portable zip + release notes | After P2-4 |
+
+P0/P1 and P2-1 are **Done**. Optional P3 polish may slip to `v0.1.x` / `v0.2`.
 
 ## Current baseline (already in tree)
 
@@ -71,9 +84,9 @@ Master checklist: [p2-proof-checklist.md](p2-proof-checklist.md) · local gate: 
 | ID | Work | Owner | Proof | Status |
 |----|------|-------|-------|--------|
 | P2-1 | **GitHub Actions** — `cargo test -p guardian-core -p guardian-detect` + release build + fixture + package | `.github/workflows/ci.yml` | Green CI / local verify script | **Done** (artifact; sign CI green on first push) |
-| P2-2 | **L3 Disk Lock soak** — Task Manager Active Time vs gauge; soft/hard at user % | soak checklist | Signed off | **Ready** (manual) |
-| P2-3 | **L4** — fake-miner / decoy suspend; Explorer/Cursor/whitelist never suspended | `fixtures/fake_miner` | Signed off | **Ready** (manual; fixture builds) |
-| P2-4 | **False-positive pass** — gaming + Cursor coding 2h with whitelist | manual | No bad suspend | **Ready** (manual) |
+| P2-2 | **L3 Disk Lock soak** — Task Manager Active Time vs gauge; soft/hard at user % | soak checklist | **Probe PASS 2026-07-17** |
+| P2-3 | **L4** — fake-miner / decoy suspend; Explorer/Cursor/whitelist never suspended | `fixtures/fake_miner` | **PASS 2026-07-17** |
+| P2-4 | **False-positive pass** — gaming + Cursor coding 2h with whitelist | manual | **Ready** (manual — last blocker) |
 
 ### P3 — Polish (v0.1.x allowed to slip small items)
 
@@ -89,8 +102,8 @@ Master checklist: [p2-proof-checklist.md](p2-proof-checklist.md) · local gate: 
 
 | Item | Why deferred |
 |------|----------------|
-| **Mem Lock** (RSS trim ladder) | Large feature; document as next after v0.1 |
-| MSI / MSIX / Store | Portable + PS1 uninstall is enough for first cohort |
+| **Mem Lock** (RSS trim ladder) | **In tree** (L3 PASS). Include lightly in v0.1 notes; L4 + marketing push in [v0.2](roadmap-next-release.md) |
+| MSI / MSIX / Store | Portable + PS1 uninstall is enough for first cohort → **v0.2** |
 | Windows SCM service | Session exe + autostart is simpler |
 | Kernel / minifilter I/O QoS | Non-goal |
 | Standby-list purge | Dangerous; opt-in later |
@@ -105,7 +118,7 @@ Master checklist: [p2-proof-checklist.md](p2-proof-checklist.md) · local gate: 
 3. **Week C — P2** CI + soak on the WD Green boot SSD machine  
 4. **Tag `v0.1.0`** portable zip + release notes  
 5. **v0.1.1** hotfixes from soak only  
-6. **v0.2** Mem Lock + installer
+6. **v0.2** — see [roadmap-next-release.md](roadmap-next-release.md) (Mem Lock L4, installer, signing, optional Darwin)
 
 ---
 
@@ -113,17 +126,19 @@ Master checklist: [p2-proof-checklist.md](p2-proof-checklist.md) · local gate: 
 
 ```text
 Unstick v0.1.0
-- Soft throttle under CPU/RAM/disk pressure
+- Soft throttle under CPU/RAM/disk pressure (Soft only by default)
 - Disk Lock with user safe soft/hard Active Time %
-- Critical Guard process pause with auto-resume
+- Mem Lock: trim background working sets when available RAM is scarce
+- Critical Guard last-resort pause (opt-in) with auto-resume
 - Whitelist for games/apps
 - Abuse/miner heuristics (not antivirus)
+- Focus-aware boost; thermal Serious suppresses Suspend
 
 Limits:
 - User-mode only; cannot hard-cap IOPS on Win10/11 desktop
 - May not control elevated processes without admin
-- Crash recovery: ledger resume on restart (P0-1)
-- Mem Lock not included (see v0.2)
+- Crash recovery: ledger resume on restart
+- DPC/ISR issues are advisory only (cannot fix bad drivers)
 ```
 
 ---
@@ -133,6 +148,6 @@ Limits:
 | Decision | Choice |
 |----------|--------|
 | Installer for v0.1 | Portable + PowerShell autostart/uninstall |
-| Mem Lock | Defer to v0.2 |
+| Mem Lock | In v0.1 binary; L4 bar + installer in v0.2 ([roadmap-next-release.md](roadmap-next-release.md)) |
 | Hard ship gate | P0 suspend recovery + P2 soak on target hardware |
 | Adaptive disk | User busy% authoritative; adaptive queue only |

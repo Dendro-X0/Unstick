@@ -6,12 +6,38 @@ use serde::{Deserialize, Serialize};
 
 use crate::APP_NAME;
 
+/// How Critical Guard escalates under Emergency / Disk Lock Hard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CriticalGuardMode {
+    /// Progressive soft throttle only — never NtSuspend (default).
+    #[default]
+    SoftOnly,
+    /// Soft ladder first; Suspend only after sustained hard pressure streak.
+    LastResortSuspend,
+}
+
+impl CriticalGuardMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SoftOnly => "soft_only",
+            Self::LastResortSuspend => "last_resort_suspend",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GuardianConfig {
     pub pause_until: Option<DateTime<Utc>>,
-    /// Critical Guard: NtSuspendProcess under emergency (default ON).
+    /// Critical Guard master enable (soft ladder always; Suspend only with mode).
     #[serde(default = "default_true")]
     pub emergency_suspend: bool,
+    /// Soft-only (default) vs last-resort Suspend after streak.
+    #[serde(default)]
+    pub critical_guard_mode: CriticalGuardMode,
+    /// Consecutive Emergency/Disk Hard samples before last-resort Suspend.
+    #[serde(default = "default_suspend_escalation_streak")]
+    pub suspend_escalation_streak: u32,
     #[serde(default = "default_max_suspend_pids")]
     pub max_suspend_pids: usize,
     #[serde(default = "default_max_suspend_secs")]
@@ -30,6 +56,30 @@ pub struct GuardianConfig {
     pub disk_busy_hard_pct: f32,
     #[serde(default = "default_disk_busy_streak")]
     pub disk_busy_streak: u32,
+    /// Soft Disk Lock when Avg. Disk sec/Transfer ≥ this (seconds). Default 15ms.
+    #[serde(default = "default_disk_latency_soft")]
+    pub disk_latency_soft_sec: f32,
+    /// Hard Disk Lock / tripwire when latency ≥ this. Default 40ms.
+    #[serde(default = "default_disk_latency_hard")]
+    pub disk_latency_hard_sec: f32,
+    /// Mem Lock: RSS trim when available RAM / commit scarce.
+    #[serde(default = "default_true")]
+    pub mem_lock_enabled: bool,
+    /// Soft when available RAM % of total is below this.
+    #[serde(default = "default_mem_avail_soft")]
+    pub mem_avail_soft_pct: f32,
+    /// Hard when available % below this (and paging evidence by default).
+    #[serde(default = "default_mem_avail_hard")]
+    pub mem_avail_hard_pct: f32,
+    #[serde(default = "default_mem_commit_soft")]
+    pub mem_commit_soft_pct: f32,
+    #[serde(default = "default_mem_commit_hard")]
+    pub mem_commit_hard_pct: f32,
+    #[serde(default = "default_mem_lock_streak")]
+    pub mem_lock_streak: u32,
+    /// Hard Mem Lock requires paging_pressure_evidence.
+    #[serde(default = "default_true")]
+    pub mem_lock_hard_requires_paging: bool,
     pub allow_paths: Vec<String>,
     /// User whitelist: never soft-throttle, suspend, or terminate matching processes.
     /// Entries match executable name (e.g. `steam.exe`) or path substring (e.g. `\steam\`).
@@ -62,12 +112,38 @@ fn default_disk_busy_hard() -> f32 {
 fn default_disk_busy_streak() -> u32 {
     2
 }
+fn default_disk_latency_soft() -> f32 {
+    0.015
+}
+fn default_disk_latency_hard() -> f32 {
+    0.040
+}
+fn default_mem_avail_soft() -> f32 {
+    15.0
+}
+fn default_mem_avail_hard() -> f32 {
+    8.0
+}
+fn default_mem_commit_soft() -> f32 {
+    90.0
+}
+fn default_mem_commit_hard() -> f32 {
+    95.0
+}
+fn default_mem_lock_streak() -> u32 {
+    2
+}
+fn default_suspend_escalation_streak() -> u32 {
+    3
+}
 
 impl Default for GuardianConfig {
     fn default() -> Self {
         Self {
             pause_until: None,
             emergency_suspend: true,
+            critical_guard_mode: CriticalGuardMode::SoftOnly,
+            suspend_escalation_streak: 3,
             max_suspend_pids: 6,
             max_suspend_secs: 45,
             disk_lock_enabled: true,
@@ -75,6 +151,15 @@ impl Default for GuardianConfig {
             disk_busy_soft_pct: 85.0,
             disk_busy_hard_pct: 95.0,
             disk_busy_streak: 2,
+            disk_latency_soft_sec: 0.015,
+            disk_latency_hard_sec: 0.040,
+            mem_lock_enabled: true,
+            mem_avail_soft_pct: 15.0,
+            mem_avail_hard_pct: 8.0,
+            mem_commit_soft_pct: 90.0,
+            mem_commit_hard_pct: 95.0,
+            mem_lock_streak: 2,
+            mem_lock_hard_requires_paging: true,
             allow_paths: default_allow_paths(),
             whitelist: Vec::new(),
             protected_extra: Vec::new(),
@@ -191,6 +276,8 @@ mod tests {
     fn default_critical_guard_on() {
         let cfg = GuardianConfig::default();
         assert!(cfg.emergency_suspend);
+        assert_eq!(cfg.critical_guard_mode, CriticalGuardMode::SoftOnly);
+        assert_eq!(cfg.suspend_escalation_streak, 3);
         assert_eq!(cfg.max_suspend_pids, 6);
         assert_eq!(cfg.max_suspend_secs, 45);
         assert!(cfg.disk_lock_enabled);
@@ -198,6 +285,16 @@ mod tests {
         assert_eq!(cfg.disk_busy_soft_pct, 85.0);
         assert_eq!(cfg.disk_busy_hard_pct, 95.0);
         assert_eq!(cfg.disk_busy_streak, 2);
+        assert!((cfg.disk_latency_soft_sec - 0.015).abs() < f32::EPSILON);
+        assert!((cfg.disk_latency_hard_sec - 0.040).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn missing_mode_deserializes_soft_only() {
+        let raw = r#"{"pause_until":null,"emergency_suspend":true,"max_suspend_pids":6,"max_suspend_secs":45,"disk_lock_enabled":true,"disk_lock_adaptive":true,"disk_busy_soft_pct":85.0,"disk_busy_hard_pct":95.0,"disk_busy_streak":2,"allow_paths":[],"whitelist":[],"protected_extra":[],"job_cpu_rate_percent":70,"sample_idle_ms":2000,"sample_busy_ms":500,"trusted_pids":[]}"#;
+        let cfg: GuardianConfig = serde_json::from_str(raw).unwrap();
+        assert_eq!(cfg.critical_guard_mode, CriticalGuardMode::SoftOnly);
+        assert_eq!(cfg.suspend_escalation_streak, 3);
     }
 
     #[test]

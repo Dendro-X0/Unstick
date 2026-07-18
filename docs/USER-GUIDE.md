@@ -50,15 +50,36 @@ On the **Guard** tab:
 
 Presets: `85 / 95` or earlier intervention `70 / 90`.
 
+## Safe available RAM (Mem Lock)
+
+On the **Guard** tab under Controls:
+
+- **Soft %** (default 15 available) — trim background working sets when free RAM drops below this
+- **Hard %** (default 8 available) — deeper trim; pause only in **Last-resort** mode after a streak (and only with real paging pressure)
+- Click **Apply RAM thresholds**
+
+Presets: `15 / 8` or earlier `20 / 10`. Mem Lock does **not** clear the standby cache.
+
 ## Whitelist
 
 Open the **WHITELIST** tab (or Monitor → Whitelist next to a process).
 
 Add game or app names (`steam.exe`) or path fragments (`\Epic Games\`). Whitelisted programs are **never** soft-throttled, Disk-Locked, or paused.
 
-## Critical Guard
+## Critical Guard (safe pause)
 
-Checkbox on Guard: when ON, emergency / Disk Lock hard may **pause** processes. They resume when pressure drops, after ~45 seconds max, when you Pause Guard, or after a service restart (crash recovery).
+Checkbox on Guard: master enable for Critical Guard. Choose a mode in Controls:
+
+| Mode | Default | Behavior |
+|------|---------|----------|
+| **Soft only** | Yes | Lowers background priority / I/O under pressure — never pauses processes |
+| **Last-resort pause** | No | Same soft ladder first; only after sustained Emergency / Disk Lock Hard may pause top offenders |
+
+The focused app (and its child processes) is never throttled or paused. When Guard is LIVE you see a **Focus · app.exe** chip.
+
+**Never paused by default:** Explorer, Cursor/VS Code, common browsers (Chrome/Edge/Firefox/Brave), and interactive shells (Windows Terminal, PowerShell, cmd).
+
+Paused processes (last-resort mode only) resume when pressure drops, after ~45 seconds max (**and will not be immediately re-paused**), when you Pause Guard, or after a service restart (crash recovery). Whitelist anything else you never want paused.
 
 ## Risks (read once)
 

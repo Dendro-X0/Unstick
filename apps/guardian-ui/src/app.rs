@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 use guardian_core::{
-    load_config, status_path, ClientRequest, DiskLockMode, GuardianConfig, PressureBand,
-    ServerPush, StatusSnapshot, ThrottleSummary,
+    load_config, status_path, ApplyDeniedSummary, ClientRequest, CriticalGuardMode, DiskLockMode,
+    GuardianConfig, MemLockMode, PressureBand, ServerPush, StatusSnapshot, ThrottleSummary,
 };
 
 use crate::client;
@@ -51,6 +51,12 @@ pub struct UnstickApp {
     /// Draft safe disk busy% (applied via IPC).
     disk_soft_edit: f32,
     disk_hard_edit: f32,
+    mem_soft_edit: f32,
+    mem_hard_edit: f32,
+    /// Guard secondary controls (Critical Guard, disk thresholds).
+    controls_open: bool,
+    /// One-shot auto-expand when Disk Lock / suspend needs attention.
+    controls_auto_armed: bool,
 }
 
 const GAUGE_SEGMENTS: f32 = 15.0;
@@ -157,9 +163,15 @@ impl UnstickApp {
             config: load_config(),
             disk_soft_edit: 85.0,
             disk_hard_edit: 95.0,
+            mem_soft_edit: 15.0,
+            mem_hard_edit: 8.0,
+            controls_open: false,
+            controls_auto_armed: false,
         };
         app.disk_soft_edit = app.config.disk_busy_soft_pct;
         app.disk_hard_edit = app.config.disk_busy_hard_pct;
+        app.mem_soft_edit = app.config.mem_avail_soft_pct;
+        app.mem_hard_edit = app.config.mem_avail_hard_pct;
         app
     }
 }
@@ -221,7 +233,7 @@ impl eframe::App for UnstickApp {
             .show(ctx, |ui| {
                 let brand_row = ui.horizontal(|ui| {
                     ui.label(theme::brand_title());
-                    ui.add_space(8.0);
+                    ui.add_space(10.0);
                     let ver = status
                         .as_ref()
                         .map(|s| s.version.as_str())
@@ -233,8 +245,6 @@ impl eframe::App for UnstickApp {
                             .color(TEXT_DIM)
                             .monospace(),
                     );
-                    ui.add_space(10.0);
-                    ui.label(theme::dim("Keeps Dev & Play responsive"));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         widgets::live_badge(ui, online);
                     });
@@ -282,17 +292,14 @@ impl eframe::App for UnstickApp {
                     0.0,
                     theme::TEAL_DIM.gamma_multiply(0.55),
                 );
-                ui.add_space(4.0);
-                ui.horizontal_centered(|ui| {
-                    let w = ((ui.available_width() - 56.0) / 4.0).clamp(130.0, 220.0);
-                    widgets::led_gauge(ui, "CPU", self.cpu_disp, self.cpu_lit, w);
-                    widgets::gauge_divider(ui);
-                    widgets::led_gauge(ui, "RAM", self.ram_disp, self.ram_lit, w);
-                    widgets::gauge_divider(ui);
-                    widgets::led_gauge(ui, "DISK", self.disk_disp, self.disk_lit, w);
-                    widgets::gauge_divider(ui);
-                    widgets::led_gauge(ui, "PRESSURE", self.pressure_disp, self.pressure_lit, w);
-                });
+                ui.add_space(6.0);
+                widgets::footer_gauge_row(
+                    ui,
+                    (self.cpu_disp, self.cpu_lit),
+                    (self.ram_disp, self.ram_lit),
+                    (self.disk_disp, self.disk_lit),
+                    (self.pressure_disp, self.pressure_lit),
+                );
             });
 
         egui::CentralPanel::default()
@@ -316,8 +323,23 @@ impl eframe::App for UnstickApp {
 
                 if let Some((msg, at)) = &toast {
                     if at.elapsed() < Duration::from_secs(4) {
-                        ui.label(egui::RichText::new(msg).color(TEAL));
-                        ui.add_space(8.0);
+                        let short = shorten_toast(msg);
+                        ui.vertical_centered(|ui| {
+                            egui::Frame::NONE
+                                .fill(TEAL.gamma_multiply(0.12))
+                                .corner_radius(theme::RADIUS_SM)
+                                .inner_margin(egui::Margin::symmetric(14, 6))
+                                .stroke(egui::Stroke::new(1.0, TEAL.gamma_multiply(0.35)))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(short)
+                                            .size(12.0)
+                                            .color(TEAL)
+                                            .strong(),
+                                    );
+                                });
+                        });
+                        ui.add_space(10.0);
                     }
                 }
 
@@ -342,23 +364,80 @@ impl UnstickApp {
         let critical_on = status.map(|s| s.critical_guard).unwrap_or(true);
         let suspended_n = status.map(|s| s.suspended.len()).unwrap_or(0);
         let disk_lock = status.map(|s| s.disk_lock).unwrap_or(DiskLockMode::Off);
+        let mem_lock = status.map(|s| s.mem_lock).unwrap_or(MemLockMode::Off);
         let denied = status.map(|s| s.apply_denied.as_slice()).unwrap_or(&[]);
         let recovered = status.map(|s| s.recovered_suspends).unwrap_or(0);
         let tripwire = status.and_then(|s| s.tripwire.as_deref());
         let warn_pulse = matches!(
             status.map(|s| s.pressure_band),
             Some(PressureBand::Warn | PressureBand::Throttle | PressureBand::Emergency)
-        ) || disk_lock != DiskLockMode::Off;
+        ) || disk_lock != DiskLockMode::Off
+            || mem_lock != MemLockMode::Off;
         let pulse = if warn_pulse {
             (self.pulse_t * 3.0).sin().abs()
         } else {
             0.0
         };
 
-        widgets::paint_hero_backdrop(ui, 140.0);
+        // Auto-expand Controls once when attention is needed; user may still collapse.
+        let needs_attention =
+            suspended_n > 0 || disk_lock != DiskLockMode::Off || mem_lock != MemLockMode::Off;
+        if needs_attention && !self.controls_auto_armed {
+            self.controls_open = true;
+            self.controls_auto_armed = true;
+        } else if !needs_attention {
+            self.controls_auto_armed = false;
+        }
 
+        widgets::paint_hero_backdrop(ui, 120.0);
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                self.ui_guard_body(
+                    ui,
+                    status,
+                    armed,
+                    band,
+                    score,
+                    critical_on,
+                    suspended_n,
+                    disk_lock,
+                    mem_lock,
+                    denied,
+                    recovered,
+                    tripwire,
+                    pulse,
+                );
+            });
+    }
+
+    fn ui_guard_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        status: Option<&StatusSnapshot>,
+        armed: bool,
+        band: &str,
+        score: Option<f32>,
+        critical_on: bool,
+        suspended_n: usize,
+        disk_lock: DiskLockMode,
+        mem_lock: MemLockMode,
+        denied: &[ApplyDeniedSummary],
+        recovered: u32,
+        tripwire: Option<&str>,
+        pulse: f32,
+    ) {
         ui.vertical_centered(|ui| {
-            ui.add_space(8.0);
+            // Vertically center the hero when Controls is collapsed.
+            if !self.controls_open {
+                let hero_h = 320.0;
+                let pad = ((ui.available_height() - hero_h) * 0.5).clamp(8.0, 48.0);
+                ui.add_space(pad);
+            } else {
+                ui.add_space(8.0);
+            }
+
             let cta = widgets::guard_cta(ui, armed, pulse);
             if cta.clicked {
                 let req = if armed {
@@ -369,136 +448,285 @@ impl UnstickApp {
                 let _ = self.cmd_tx.send(req);
             }
             ui.add_space(14.0);
-            ui.horizontal_centered(|ui| {
-                widgets::pressure_readout(ui, band, score);
-                if let Some(tw) = tripwire {
+            widgets::pressure_readout(ui, band, score);
+            if let Some(tw) = tripwire {
+                ui.add_space(8.0);
+                ui.horizontal_centered(|ui| {
+                    widgets::status_chip(ui, format!("tripwire · {tw}"), CORAL);
+                });
+            }
+            if let Some(adv) = status.and_then(|s| s.dpc_advisory.as_ref()) {
+                if !adv.is_empty() {
                     ui.add_space(8.0);
-                    ui.label(
-                        egui::RichText::new(format!("tripwire:{tw}"))
-                            .size(11.0)
-                            .color(CORAL)
-                            .monospace(),
-                    );
+                    ui.horizontal_centered(|ui| {
+                        let label = if status
+                            .map(|s| s.dpc_time_percent.max(s.interrupt_time_percent) >= 20.0)
+                            .unwrap_or(false)
+                        {
+                            "DPC/ISR · high"
+                        } else {
+                            "DPC/ISR · elevated"
+                        };
+                        widgets::status_chip(ui, label, theme::AMBER);
+                    });
                 }
-            });
-            ui.add_space(10.0);
-            if suspended_n > 0 {
-                egui::Frame::NONE
-                    .fill(CORAL.gamma_multiply(0.12))
-                    .corner_radius(theme::RADIUS_SM)
-                    .inner_margin(egui::Margin::symmetric(12, 8))
-                    .stroke(egui::Stroke::new(1.0, CORAL.gamma_multiply(0.35)))
-                    .show(ui, |ui| {
-                        ui.set_max_width(520.0);
+            }
+            if let Some(s) = status {
+                use guardian_core::ThermalLevel;
+                match s.thermal_level {
+                    ThermalLevel::Nominal => {
+                        if s.on_battery {
+                            ui.add_space(8.0);
+                            ui.horizontal_centered(|ui| {
+                                let label = if let Some(p) = s.battery_percent {
+                                    format!("Battery · {p}%")
+                                } else {
+                                    "Battery".into()
+                                };
+                                widgets::status_chip(ui, label, TEXT_DIM);
+                            });
+                        }
+                    }
+                    ThermalLevel::Fair => {
+                        ui.add_space(8.0);
+                        ui.horizontal_centered(|ui| {
+                            widgets::status_chip(ui, "Thermal · fair", theme::AMBER);
+                        });
+                    }
+                    ThermalLevel::Serious => {
+                        ui.add_space(8.0);
+                        ui.horizontal_centered(|ui| {
+                            widgets::status_chip(ui, "Thermal · serious", CORAL);
+                        });
+                    }
+                }
+                ui.add_space(8.0);
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    widgets::status_chip(
+                        ui,
+                        format!("QoS · {}", s.focus_qos.as_str().replace('_', " ")),
+                        TEXT_DIM,
+                    );
+                    let nap_label = match s.nap_policy {
+                        guardian_core::NapPolicy::Cooperate => "Nap · cooperate",
+                        guardian_core::NapPolicy::ForcePause => "Nap · force pause",
+                    };
+                    let nap_color = match s.nap_policy {
+                        guardian_core::NapPolicy::Cooperate => TEXT_DIM,
+                        guardian_core::NapPolicy::ForcePause => theme::AMBER,
+                    };
+                    widgets::status_chip(ui, nap_label, nap_color);
+                });
+            }
+
+            // Compact status chips in the first viewport (no long copy).
+            if suspended_n > 0 || disk_lock != DiskLockMode::Off || mem_lock != MemLockMode::Off {
+                ui.add_space(10.0);
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if suspended_n > 0 {
+                        widgets::status_chip(ui, format!("{suspended_n} suspended"), CORAL);
+                    }
+                    if disk_lock != DiskLockMode::Off {
+                        let dl_color = match disk_lock {
+                            DiskLockMode::Hard => CORAL,
+                            DiskLockMode::Soft => theme::AMBER,
+                            DiskLockMode::Off => TEXT_DIM,
+                        };
+                        let dl_label = match disk_lock {
+                            DiskLockMode::Hard => {
+                                if let Some(s) = status {
+                                    format!("Disk Lock HARD · {:.0}%", s.disk_lock_hard_pct)
+                                } else {
+                                    "Disk Lock HARD".into()
+                                }
+                            }
+                            DiskLockMode::Soft => {
+                                if let Some(s) = status {
+                                    format!("Disk Lock SOFT · {:.0}%", s.disk_lock_soft_pct)
+                                } else {
+                                    "Disk Lock SOFT".into()
+                                }
+                            }
+                            DiskLockMode::Off => String::new(),
+                        };
+                        widgets::status_chip(ui, dl_label, dl_color);
+                    }
+                    if mem_lock != MemLockMode::Off {
+                        let ml_color = match mem_lock {
+                            MemLockMode::Hard => CORAL,
+                            MemLockMode::Soft => theme::AMBER,
+                            MemLockMode::Off => TEXT_DIM,
+                        };
+                        let ml_label = match mem_lock {
+                            MemLockMode::Hard => {
+                                if let Some(s) = status {
+                                    format!("Mem Lock HARD · {:.0}%", s.mem_lock_hard_pct)
+                                } else {
+                                    "Mem Lock HARD".into()
+                                }
+                            }
+                            MemLockMode::Soft => {
+                                if let Some(s) = status {
+                                    format!("Mem Lock SOFT · {:.0}%", s.mem_lock_soft_pct)
+                                } else {
+                                    "Mem Lock SOFT".into()
+                                }
+                            }
+                            MemLockMode::Off => String::new(),
+                        };
+                        widgets::status_chip(ui, ml_label, ml_color);
+                    }
+                });
+            }
+
+            if let Some(name) = status.and_then(|s| s.focus_name.as_deref()) {
+                if !name.is_empty() && armed {
+                    ui.add_space(10.0);
+                    ui.horizontal_centered(|ui| {
+                        widgets::status_chip(ui, format!("Focus · {name}"), TEAL);
+                    });
+                }
+            }
+
+            ui.add_space(18.0);
+            if widgets::controls_toggle(ui, self.controls_open) {
+                self.controls_open = !self.controls_open;
+            }
+
+            if !self.controls_open {
+                return;
+            }
+
+            ui.add_space(12.0);
+            ui.vertical_centered(|ui| {
+            egui::Frame::NONE
+                .fill(theme::BG_PANEL)
+                .corner_radius(theme::RADIUS_MD)
+                .inner_margin(egui::Margin::symmetric(18, 14))
+                .stroke(egui::Stroke::new(1.0, theme::LINE))
+                .show(ui, |ui| {
+                    ui.set_width(520.0);
+                    if suspended_n > 0 {
                         ui.label(
                             egui::RichText::new(
-                                "Safety: some background processes are paused to keep the desktop responsive. They auto-resume when pressure drops, after the max pause timer, or when you Pause Guard. Whitelisted apps are never paused.",
+                                "Background processes are paused so the desktop stays responsive. They auto-resume when pressure drops, after the max pause timer, or when you Pause Guard. Whitelisted apps are never paused.",
                             )
                             .size(12.0)
                             .color(TEXT),
                         );
-                    });
-                ui.add_space(8.0);
-            }
-            if recovered > 0 {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "Recovered {recovered} paused process(es) after last restart"
-                    ))
-                    .size(11.0)
-                    .color(TEAL),
-                );
-                ui.add_space(6.0);
-            }
-            if !denied.is_empty() {
-                let elev = denied.iter().filter(|d| d.elevation_likely).count();
-                let msg = if elev > 0 {
-                    format!(
-                        "Could not control {elev} elevated process(es) — run Guard as admin or whitelist them"
-                    )
-                } else {
-                    format!("Could not apply limits to {} process(es)", denied.len())
-                };
-                ui.label(egui::RichText::new(msg).size(11.0).color(theme::AMBER));
-                ui.add_space(6.0);
-            }
-            ui.horizontal_centered(|ui| {
-                let mut on = critical_on;
-                if ui
-                    .checkbox(
-                        &mut on,
-                        egui::RichText::new("Critical Guard")
-                            .size(13.0)
-                            .strong()
-                            .color(if critical_on { TEAL } else { TEXT_DIM }),
-                    )
-                    .changed()
-                {
-                    let _ = self
-                        .cmd_tx
-                        .send(ClientRequest::SetCriticalGuard { enabled: on });
-                }
-                ui.add_space(12.0);
-                let chip_color = if suspended_n > 0 { CORAL } else { TEXT_DIM };
-                egui::Frame::NONE
-                    .fill(chip_color.gamma_multiply(0.15))
-                    .corner_radius(6.0)
-                    .inner_margin(egui::Margin::symmetric(10, 4))
-                    .stroke(egui::Stroke::new(1.0, chip_color.gamma_multiply(0.4)))
-                    .show(ui, |ui| {
+                        ui.add_space(8.0);
+                    }
+                    if recovered > 0 {
                         ui.label(
-                            egui::RichText::new(format!("{suspended_n} suspended"))
-                                .size(12.0)
-                                .strong()
-                                .color(chip_color),
+                            egui::RichText::new(format!(
+                                "Recovered {recovered} paused process(es) after last restart"
+                            ))
+                            .size(11.0)
+                            .color(TEAL),
                         );
-                    });
-                if disk_lock != DiskLockMode::Off {
-                    ui.add_space(8.0);
-                    let dl_color = match disk_lock {
-                        DiskLockMode::Hard => CORAL,
-                        DiskLockMode::Soft => theme::AMBER,
-                        DiskLockMode::Off => TEXT_DIM,
-                    };
-                    let dl_label = match disk_lock {
-                        DiskLockMode::Hard => {
-                            if let Some(s) = status {
-                                format!("Disk Lock HARD · {:.0}%", s.disk_lock_hard_pct)
-                            } else {
-                                "Disk Lock HARD".into()
-                            }
-                        }
-                        DiskLockMode::Soft => {
-                            if let Some(s) = status {
-                                format!("Disk Lock SOFT · {:.0}%", s.disk_lock_soft_pct)
-                            } else {
-                                "Disk Lock SOFT".into()
-                            }
-                        }
-                        DiskLockMode::Off => String::new(),
-                    };
-                    egui::Frame::NONE
-                        .fill(dl_color.gamma_multiply(0.15))
-                        .corner_radius(6.0)
-                        .inner_margin(egui::Margin::symmetric(10, 4))
-                        .stroke(egui::Stroke::new(1.0, dl_color.gamma_multiply(0.4)))
-                        .show(ui, |ui| {
-                            ui.label(
-                                egui::RichText::new(dl_label)
-                                    .size(12.0)
+                        ui.add_space(6.0);
+                    }
+                    if !denied.is_empty() {
+                        let elev = denied.iter().filter(|d| d.elevation_likely).count();
+                        let msg = if elev > 0 {
+                            format!(
+                                "Could not control {elev} elevated process(es) — run Guard as admin or whitelist them"
+                            )
+                        } else {
+                            format!("Could not apply limits to {} process(es)", denied.len())
+                        };
+                        ui.label(egui::RichText::new(msg).size(11.0).color(theme::AMBER));
+                        ui.add_space(6.0);
+                    }
+
+                    ui.horizontal(|ui| {
+                        let mut on = critical_on;
+                        if ui
+                            .checkbox(
+                                &mut on,
+                                egui::RichText::new("Critical Guard")
+                                    .size(13.0)
                                     .strong()
-                                    .color(dl_color),
+                                    .color(if critical_on { TEAL } else { TEXT_DIM }),
+                            )
+                            .changed()
+                        {
+                            let _ = self
+                                .cmd_tx
+                                .send(ClientRequest::SetCriticalGuard { enabled: on });
+                        }
+                        ui.add_space(12.0);
+                        let chip_color = if suspended_n > 0 { CORAL } else { TEXT_DIM };
+                        egui::Frame::NONE
+                            .fill(chip_color.gamma_multiply(0.15))
+                            .corner_radius(6.0)
+                            .inner_margin(egui::Margin::symmetric(10, 4))
+                            .stroke(egui::Stroke::new(1.0, chip_color.gamma_multiply(0.4)))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("{suspended_n} suspended"))
+                                        .size(12.0)
+                                        .strong()
+                                        .color(chip_color),
+                                );
+                            });
+                    });
+
+                    if critical_on {
+                        ui.add_space(8.0);
+                        let mode = status
+                            .map(|s| s.critical_guard_mode)
+                            .unwrap_or(CriticalGuardMode::SoftOnly);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new("Mode")
+                                    .size(12.0)
+                                    .color(TEXT_DIM),
                             );
+                            ui.add_space(8.0);
+                            let soft_sel = mode == CriticalGuardMode::SoftOnly;
+                            let soft = ui.selectable_label(
+                                soft_sel,
+                                egui::RichText::new("Soft only")
+                                    .size(12.0)
+                                    .color(if soft_sel { TEAL } else { TEXT_DIM }),
+                            );
+                            if soft.clicked() && !soft_sel {
+                                let _ = self.cmd_tx.send(ClientRequest::SetCriticalGuardMode {
+                                    mode: CriticalGuardMode::SoftOnly,
+                                });
+                            }
+                            ui.add_space(4.0);
+                            let last_sel = mode == CriticalGuardMode::LastResortSuspend;
+                            let last = ui.selectable_label(
+                                last_sel,
+                                egui::RichText::new("Last-resort pause")
+                                    .size(12.0)
+                                    .color(if last_sel { CORAL } else { TEXT_DIM }),
+                            );
+                            if last.clicked() && !last_sel {
+                                let _ = self.cmd_tx.send(ClientRequest::SetCriticalGuardMode {
+                                    mode: CriticalGuardMode::LastResortSuspend,
+                                });
+                            }
                         });
-                }
-            });
-            ui.add_space(14.0);
-            // Safe disk usage — user thresholds
-            egui::Frame::NONE
-                .fill(theme::BG_PANEL)
-                .corner_radius(theme::RADIUS_SM)
-                .inner_margin(egui::Margin::symmetric(14, 10))
-                .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(match mode {
+                                CriticalGuardMode::SoftOnly => {
+                                    "Default: ease background work without pausing processes."
+                                }
+                                CriticalGuardMode::LastResortSuspend => {
+                                    "After sustained emergency pressure, pause top offenders (never the focused app)."
+                                }
+                            })
+                            .size(11.0)
+                            .color(TEXT_DIM),
+                        );
+                    }
+
+                    ui.add_space(12.0);
                     ui.label(
                         egui::RichText::new("Safe disk usage")
                             .size(13.0)
@@ -506,7 +734,7 @@ impl UnstickApp {
                             .color(TEXT),
                     );
                     ui.label(theme::dim(
-                        "Soft: limit offender I/O when Active Time reaches this %. Hard: temporarily pause top disk processes.",
+                        "Soft: limit offender I/O at this Active Time %. Hard: pause top disk processes.",
                     ));
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
@@ -549,26 +777,59 @@ impl UnstickApp {
                             self.disk_hard_edit = 90.0;
                         }
                     });
-                });
-            ui.add_space(18.0);
 
-            let card_w = ((ui.available_width() - 20.0) / 2.0).clamp(260.0, 360.0);
-            ui.horizontal_centered(|ui| {
-                widgets::profile_panel(
-                    ui,
-                    "DEV BUILDS",
-                    "Caps cargo / node / MCP workers under pressure",
-                    TEAL,
-                    card_w,
-                );
-                ui.add_space(16.0);
-                widgets::profile_panel(
-                    ui,
-                    "GAMES & PLAY",
-                    "Protects foreground + shell; soft-throttles background",
-                    theme::AMBER,
-                    card_w,
-                );
+                    ui.add_space(12.0);
+                    ui.label(
+                        egui::RichText::new("Safe available RAM")
+                            .size(13.0)
+                            .strong()
+                            .color(TEXT),
+                    );
+                    ui.label(theme::dim(
+                        "Soft: trim background working sets below this available %. Hard: deeper trim (Suspend only in Last resort).",
+                    ));
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Soft").color(TEXT_DIM));
+                        ui.add(
+                            egui::Slider::new(&mut self.mem_soft_edit, 5.0..=40.0).suffix("%"),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Hard").color(TEXT_DIM));
+                        ui.add(
+                            egui::Slider::new(&mut self.mem_hard_edit, 2.0..=35.0).suffix("%"),
+                        );
+                    });
+                    if self.mem_hard_edit >= self.mem_soft_edit {
+                        self.mem_hard_edit = (self.mem_soft_edit - 0.5).max(2.0);
+                    }
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(egui::RichText::new("Apply RAM thresholds").color(TEAL))
+                            .clicked()
+                        {
+                            let soft = self.mem_soft_edit;
+                            let hard = self.mem_hard_edit.min(soft - 0.5).max(2.0);
+                            self.config.mem_avail_soft_pct = soft;
+                            self.config.mem_avail_hard_pct = hard;
+                            let _ = self.cmd_tx.send(ClientRequest::SetMemSafeThresholds {
+                                soft_pct: soft,
+                                hard_pct: hard,
+                            });
+                        }
+                        ui.add_space(8.0);
+                        if ui.small_button("15 / 8").clicked() {
+                            self.mem_soft_edit = 15.0;
+                            self.mem_hard_edit = 8.0;
+                        }
+                        if ui.small_button("20 / 10").clicked() {
+                            self.mem_soft_edit = 20.0;
+                            self.mem_hard_edit = 10.0;
+                        }
+                    });
+                });
             });
         });
     }
@@ -578,22 +839,18 @@ impl UnstickApp {
         ui.label(theme::dim("Ranked by CPU — soft-throttle targets non-protected offenders"));
         ui.add_space(12.0);
 
-        let spark_w = ((ui.available_width() - 12.0) / 2.0).clamp(200.0, 400.0);
-        ui.horizontal(|ui| {
+        ui.columns(2, |cols| {
             widgets::sparkline_panel(
-                ui,
+                &mut cols[0],
                 "CPU — last 60s",
                 &self.history.cpu_slice(),
                 TEAL,
-                spark_w,
             );
-            ui.add_space(12.0);
             widgets::sparkline_panel(
-                ui,
+                &mut cols[1],
                 "DISK — last 60s",
                 &self.history.disk_slice(),
                 theme::AMBER,
-                spark_w,
             );
         });
         ui.add_space(14.0);
@@ -790,6 +1047,22 @@ impl UnstickApp {
                 }
             }
         }
+    }
+}
+
+fn shorten_toast(msg: &str) -> String {
+    // Service often returns "paused until <RFC3339>" — keep the hero clean.
+    if let Some(rest) = msg.strip_prefix("paused until ") {
+        if let Some(t) = rest.split('T').nth(1) {
+            let hhmm = t.get(..5).unwrap_or(t);
+            return format!("Paused until {hhmm}");
+        }
+        return "Paused".into();
+    }
+    if msg.len() > 64 {
+        format!("{}…", &msg[..61])
+    } else {
+        msg.to_string()
     }
 }
 

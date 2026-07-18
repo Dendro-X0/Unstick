@@ -110,74 +110,118 @@ fn nav_tab_trapezoid(ui: &mut Ui, label: &str, active: bool, width: f32, height:
 }
 
 /// LED gauge — `lit_segments` animates fractionally (0..15).
+/// `width` is the full column width (includes horizontal inset).
 pub fn led_gauge(ui: &mut Ui, label: &str, value01: f32, lit_segments: f32, width: f32) {
     let value01 = value01.clamp(0.0, 1.0);
-    let segments = 15;
-    let lit_f = lit_segments.clamp(0.0, segments as f32);
+    let segments = 12;
+    let lit_f = lit_segments.clamp(0.0, GAUGE_SEGMENTS_UI) * (segments as f32 / GAUGE_SEGMENTS_UI);
+    let width = width.max(80.0);
+    let inset = 10.0;
+    let inner = (width - inset * 2.0).max(56.0);
 
-    ui.vertical(|ui| {
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(label)
-                    .size(10.5)
-                    .color(TEXT_DIM)
-                    .strong(),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    ui.allocate_ui_with_layout(
+        Vec2::new(width, 58.0),
+        egui::Layout::top_down(egui::Align::Center),
+        |ui| {
+            ui.set_min_size(Vec2::new(width, 58.0));
+            ui.set_max_width(width);
+
+            ui.horizontal(|ui| {
+                ui.set_width(inner);
                 ui.label(
-                    egui::RichText::new(format!("{:.0}%", value01 * 100.0))
-                        .size(11.0)
-                        .color(TEXT)
-                        .monospace(),
+                    egui::RichText::new(label)
+                        .size(10.5)
+                        .color(TEXT_DIM)
+                        .strong(),
                 );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{:.0}%", value01 * 100.0))
+                            .size(11.0)
+                            .color(TEXT)
+                            .monospace(),
+                    );
+                });
             });
-        });
-        let height = 16.0;
-        let (rect, _resp) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
-        let painter = ui.painter();
-        let gap = 2.0;
-        let seg_w = (rect.width() - gap * (segments as f32 - 1.0)) / segments as f32;
-        let fill = if value01 >= 0.85 {
-            CORAL
-        } else if value01 >= 0.70 {
-            AMBER
-        } else {
-            TEAL
-        };
 
-        painter.rect_filled(rect.expand(2.0), CornerRadius::same(3), Color32::from_rgb(0x16, 0x19, 0x1E));
-
-        for i in 0..segments {
-            let x = rect.left() + i as f32 * (seg_w + gap);
-            let seg = Rect::from_min_size(Pos2::new(x, rect.top()), Vec2::new(seg_w, height));
-            let frac = (lit_f - i as f32).clamp(0.0, 1.0);
-            if frac <= 0.001 {
-                painter.rect_filled(seg, CornerRadius::same(2), Color32::from_rgb(0x2A, 0x2F, 0x36));
+            ui.add_space(4.0);
+            let height = 14.0;
+            let (rect, _resp) = ui.allocate_exact_size(Vec2::new(inner, height), Sense::hover());
+            let painter = ui.painter();
+            let gap = 2.0;
+            let seg_w = ((rect.width() - gap * (segments as f32 - 1.0)) / segments as f32).max(2.0);
+            let fill = if value01 >= 0.85 {
+                CORAL
+            } else if value01 >= 0.70 {
+                AMBER
             } else {
-                let bright = fill.gamma_multiply(0.55 + 0.45 * frac);
-                painter.rect_filled(seg, CornerRadius::same(2), bright);
+                TEAL
+            };
+
+            painter.rect_filled(
+                rect.expand(2.0),
+                CornerRadius::same(3),
+                Color32::from_rgb(0x16, 0x19, 0x1E),
+            );
+
+            for i in 0..segments {
+                let x = rect.left() + i as f32 * (seg_w + gap);
+                let seg = Rect::from_min_size(Pos2::new(x, rect.top()), Vec2::new(seg_w, height));
+                let frac = (lit_f - i as f32).clamp(0.0, 1.0);
+                if frac <= 0.001 {
+                    painter.rect_filled(seg, CornerRadius::same(2), Color32::from_rgb(0x2A, 0x2F, 0x36));
+                } else {
+                    let bright = fill.gamma_multiply(0.55 + 0.45 * frac);
+                    painter.rect_filled(seg, CornerRadius::same(2), bright);
+                }
             }
-        }
+        },
+    );
+}
+
+/// Four equal-width responsive gauge columns with gutters.
+pub fn footer_gauge_row(
+    ui: &mut Ui,
+    cpu: (f32, f32),
+    ram: (f32, f32),
+    disk: (f32, f32),
+    pressure: (f32, f32),
+) {
+    let avail = ui.available_width();
+    let gutter = 14.0;
+    let n = 4.0;
+    let col_w = ((avail - gutter * (n - 1.0)) / n).max(72.0);
+
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = gutter;
+        led_gauge(ui, "CPU", cpu.0, cpu.1, col_w);
+        led_gauge(ui, "RAM", ram.0, ram.1, col_w);
+        led_gauge(ui, "DISK", disk.0, disk.1, col_w);
+        led_gauge(ui, "PRESSURE", pressure.0, pressure.1, col_w);
     });
 }
 
-/// Mini sparkline for Monitor tab (last ~60 samples).
-pub fn sparkline_panel(ui: &mut Ui, label: &str, history: &[f32], color: Color32, width: f32) {
+const GAUGE_SEGMENTS_UI: f32 = 15.0;
+
+/// Mini sparkline — fills the current UI column/parent width.
+pub fn sparkline_panel(ui: &mut Ui, label: &str, history: &[f32], color: Color32) {
     let height = 44.0;
+    let width = ui.available_width().max(100.0);
     egui::Frame::NONE
         .fill(BG_PANEL)
         .stroke(Stroke::new(1.0, LINE))
         .corner_radius(RADIUS_SM)
         .inner_margin(egui::Margin::symmetric(10, 8))
         .show(ui, |ui| {
-            ui.set_width(width);
+            ui.set_min_width(width - 1.0);
             ui.label(
                 egui::RichText::new(label)
                     .size(10.5)
                     .color(TEXT_DIM)
                     .strong(),
             );
-            let (rect, _) = ui.allocate_exact_size(Vec2::new(width - 20.0, height), Sense::hover());
+            let plot_w = ui.available_width().max(60.0);
+            let (rect, _) = ui.allocate_exact_size(Vec2::new(plot_w, height), Sense::hover());
             paint_sparkline(ui, rect, history, color);
             if let Some(&last) = history.last() {
                 ui.label(
@@ -246,21 +290,28 @@ pub struct CtaResult {
 }
 
 pub fn guard_cta(ui: &mut Ui, armed: bool, pulse: f32) -> CtaResult {
-    let diameter = 196.0;
+    let diameter = 176.0;
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(diameter), Sense::click());
     let painter = ui.painter();
     let center = rect.center();
-    let ring = if armed { CORAL } else { TEXT_DIM };
-    let ring_w = 7.0 + if armed { pulse * 3.0 } else { 0.0 };
+    let ring = if armed { CORAL } else { TEAL_DIM };
+    let ring_w = if armed {
+        7.0 + pulse * 3.0
+    } else {
+        5.5
+    };
 
-    if armed {
-        for (r_mul, alpha) in [(0.56, 0.08), (0.50, 0.14), (0.44, 0.22)] {
-            painter.circle_stroke(
-                center,
-                diameter * r_mul,
-                Stroke::new(2.0 + pulse, ring.gamma_multiply(alpha)),
-            );
-        }
+    // Soft outer glow rings (armed = coral pulse; paused = calm teal)
+    let glow = if armed { ring } else { TEAL };
+    for (r_mul, alpha) in [(0.56, 0.07), (0.50, 0.12), (0.44, 0.18)] {
+        painter.circle_stroke(
+            center,
+            diameter * r_mul,
+            Stroke::new(
+                if armed { 2.0 + pulse } else { 1.5 },
+                glow.gamma_multiply(alpha),
+            ),
+        );
     }
 
     painter.circle_filled(center, diameter * 0.44, Color32::from_rgb(0x10, 0x12, 0x16));
@@ -276,11 +327,11 @@ pub fn guard_cta(ui: &mut Ui, armed: bool, pulse: f32) -> CtaResult {
         center + Vec2::new(0.0, -8.0),
         Align2::CENTER_CENTER,
         label,
-        FontId::proportional(30.0),
+        FontId::proportional(28.0),
         TEXT,
     );
     painter.text(
-        center + Vec2::new(0.0, 24.0),
+        center + Vec2::new(0.0, 22.0),
         Align2::CENTER_CENTER,
         if armed {
             "click to pause 15m"
@@ -303,33 +354,107 @@ pub fn band_chip(ui: &mut Ui, band: &str) {
         "warn" => (AMBER.gamma_multiply(0.16), AMBER),
         _ => (TEAL.gamma_multiply(0.16), TEAL),
     };
-    egui::Frame::NONE
-        .fill(bg)
-        .corner_radius(RADIUS_SM)
-        .inner_margin(egui::Margin::symmetric(12, 5))
-        .stroke(Stroke::new(1.0, fg.gamma_multiply(0.4)))
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new(band.to_uppercase()).size(11.5).strong().color(fg));
-        });
+    let text = band.to_uppercase();
+    // Fixed compact pill — never stretch with the parent row height.
+    let h = 24.0;
+    let w = (text.len() as f32 * 8.2 + 22.0).clamp(64.0, 120.0);
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        CornerRadius::same(RADIUS_SM as u8),
+        bg,
+        Stroke::new(1.0, fg.gamma_multiply(0.5)),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        text,
+        FontId::proportional(11.5),
+        fg,
+    );
 }
 
+/// Centered pressure cluster — compact chip + score on one baseline.
 pub fn pressure_readout(ui: &mut Ui, band: &str, score: Option<f32>) {
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Pressure band").size(13.0).color(TEXT_DIM));
+    ui.vertical_centered(|ui| {
+        ui.label(
+            egui::RichText::new("PRESSURE")
+                .size(10.0)
+                .strong()
+                .color(TEXT_DIM),
+        );
         ui.add_space(6.0);
-        band_chip(ui, band);
-        if let Some(s) = score {
-            ui.add_space(10.0);
-            ui.label(
-                egui::RichText::new(format!("score {s:.2}"))
-                    .size(13.0)
-                    .color(TEXT)
-                    .monospace(),
-            );
-        }
+        ui.allocate_ui_with_layout(
+            Vec2::new(200.0, 28.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                // Center the pair inside the allocated strip.
+                let pair_w = 150.0;
+                let pad = ((ui.available_width() - pair_w) * 0.5).max(0.0);
+                ui.add_space(pad);
+                band_chip(ui, band);
+                ui.add_space(10.0);
+                if let Some(s) = score {
+                    ui.label(
+                        egui::RichText::new(format!("{s:.2}"))
+                            .size(15.0)
+                            .color(TEXT)
+                            .monospace()
+                            .strong(),
+                    );
+                }
+            },
+        );
     });
 }
 
+/// Centered pill used for Controls expand/collapse.
+pub fn controls_toggle(ui: &mut Ui, open: bool) -> bool {
+    let label = if open { "Controls   v" } else { "Controls   >" };
+    let color = if open { TEAL } else { TEXT_DIM };
+    let stroke = if open {
+        Stroke::new(1.0, TEAL.gamma_multiply(0.55))
+    } else {
+        Stroke::new(1.0, LINE)
+    };
+    let mut clicked = false;
+    ui.vertical_centered(|ui| {
+        let resp = egui::Frame::NONE
+            .fill(BG_PANEL)
+            .corner_radius(RADIUS_MD)
+            .inner_margin(egui::Margin::symmetric(22, 9))
+            .stroke(stroke)
+            .show(ui, |ui| {
+                ui.set_min_width(120.0);
+                ui.label(egui::RichText::new(label).size(13.0).strong().color(color));
+            })
+            .response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .interact(Sense::click());
+        clicked = resp.clicked();
+    });
+    clicked
+}
+
+pub fn status_chip(ui: &mut Ui, text: impl Into<String>, color: Color32) {
+    egui::Frame::NONE
+        .fill(color.gamma_multiply(0.15))
+        .corner_radius(RADIUS_SM)
+        .inner_margin(egui::Margin::symmetric(12, 5))
+        .stroke(Stroke::new(1.0, color.gamma_multiply(0.4)))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(text.into())
+                    .size(12.0)
+                    .strong()
+                    .color(color),
+            );
+        });
+}
+
+#[allow(dead_code)] // kept for future interactive profiles
 pub fn profile_panel(ui: &mut Ui, title: &str, blurb: &str, accent: Color32, width: f32) {
     egui::Frame::NONE
         .fill(BG_ELEV)
@@ -348,11 +473,13 @@ pub fn profile_panel(ui: &mut Ui, title: &str, blurb: &str, accent: Color32, wid
         });
 }
 
+#[allow(dead_code)]
 pub fn gauge_divider(ui: &mut Ui) {
     let h = 52.0;
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(1.0, h), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(12.0, h), Sense::hover());
+    let x = rect.center().x;
     ui.painter().line_segment(
-        [rect.center_top(), rect.center_bottom()],
+        [Pos2::new(x, rect.top() + 4.0), Pos2::new(x, rect.bottom() - 4.0)],
         Stroke::new(1.0, LINE),
     );
 }

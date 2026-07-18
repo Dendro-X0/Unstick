@@ -13,6 +13,12 @@
 
 ## L3b — Disk Lock soak (OS drive saturation)
 
+Automated probe (low soft busy% + disk load):
+
+```powershell
+powershell -File scripts/Verify-DiskLock-L3.ps1
+```
+
 1. Open Task Manager → Performance → Disk 1 (system / page file drive).
 2. Confirm Guard **DISK** gauge tracks Active Time within ~15% once PDH is primed.
 3. Under sustained disk saturation, Guard shows **Disk Lock SOFT · N%** (amber) using **this machine's calibrated** soft threshold.
@@ -20,6 +26,24 @@
 5. Whitelisted / Explorer / Cursor never appear in suspended list.
 6. Recent throttles show reasons `disk_lock:soft` / `disk_lock:hard`.
 7. After ~40 samples, `disk_calibrated` is true in status; profile persists under `%LOCALAPPDATA%\Unstick\disk_profile.json`.
+
+## L3c — Mem Lock soak (RAM pressure / WS trim)
+
+Automated probe (raises soft available-% temporarily so Soft latches without thrashing):
+
+```powershell
+powershell -File scripts/Verify-MemLock-L3.ps1
+```
+
+Evidence written to `specs/backend/mem-lock-l3-evidence.md`.
+
+Manual (optional, real low-RAM):
+
+1. Start `guardian-service` + `guardian-ui`; Soft only; note Mem soft/hard available %.
+2. Run `cargo run --release --manifest-path fixtures/mem_hog/Cargo.toml -- 1024` (or open many apps).
+3. When available RAM drops under Soft %, Guard shows **Mem Lock SOFT · N%**; Monitor recent throttles include `mem_lock:soft` on large RSS offenders (not focus / whitelist / Explorer).
+4. Task Manager → Details → Working Set for the offender drops after Soft apply.
+5. Hard requires paging evidence — mapped-file heavy IDE work alone should not show **Mem Lock HARD**.
 
 ## L4 — Decoy suspend
 

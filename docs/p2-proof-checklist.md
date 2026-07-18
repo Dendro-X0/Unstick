@@ -7,8 +7,8 @@ Sign off by dating each row when complete. Do not tag `v0.1.0` until all four ar
 | ID | Claim | Automated / Manual | Sign-off |
 |----|-------|--------------------|----------|
 | P2-1 | `cargo test` + release build green on GitHub Actions | Automated (`.github/workflows/ci.yml`) | |
-| P2-2 | Disk Lock L3: gauge ≈ Task Manager Active Time; soft/hard at user % | Manual | |
-| P2-3 | L4 decoy: fake-miner / high load suspend; Explorer/Cursor/whitelist never suspended | Manual + fixture | |
+| P2-2 | Disk Lock L3: gauge ≈ Task Manager Active Time; soft/hard at user % | Probe + manual confirm | **2026-07-17** probe PASS — [`disk-lock-l3-evidence.md`](../specs/backend/disk-lock-l3-evidence.md); Task Manager ±15% still human-confirm on soak SSD |
+| P2-3 | L4 decoy: fake-miner / high load suspend; Explorer/Cursor/whitelist never suspended | Probe | **2026-07-17** PASS — [`p2-l4-decoy-evidence.md`](../specs/backend/p2-l4-decoy-evidence.md) |
 | P2-4 | 2h coding (Cursor) + gaming with whitelist — no bad suspends | Manual | |
 
 ---
@@ -33,6 +33,16 @@ CI workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
 
 ## P2-2 — L3 Disk Lock soak
 
+Automated probe (low soft busy% + `disk-hog`):
+
+```powershell
+powershell -File scripts/Verify-DiskLock-L3.ps1
+```
+
+Evidence: `specs/backend/disk-lock-l3-evidence.md`.
+
+Manual confirm on target SSD (still recommended before public tag):
+
 Setup: `guardian-service` + `guardian-ui`; Guard ARMED; Critical Guard ON; note Soft/Hard % on Guard tab.
 
 1. [ ] Task Manager → Performance → system disk (page file drive).
@@ -47,6 +57,14 @@ Details: [critical-guard-soak.md](critical-guard-soak.md) § L3b
 ---
 
 ## P2-3 — L4 decoy / suspend safety
+
+Automated probe:
+
+```powershell
+powershell -File scripts/Verify-P2-L4-Decoy.ps1
+```
+
+Evidence: `specs/backend/p2-l4-decoy-evidence.md`. Manual alternate:
 
 ```powershell
 cargo run --release --manifest-path fixtures/fake_miner/Cargo.toml -- stratum+tcp://example
@@ -75,6 +93,9 @@ Whitelist Steam / game folders and keep Cursor unprotected only if acceptable; o
 ---
 
 ## After all signed
+
+Also Mem Lock L3 (v0.2): `powershell -File scripts/Verify-MemLock-L3.ps1` · [critical-guard-soak.md](critical-guard-soak.md) § L3c
+
 
 1. Run `scripts/Package-Portable.ps1`
 2. Fill [roadmap-v0.1.md](roadmap-v0.1.md) release notes skeleton

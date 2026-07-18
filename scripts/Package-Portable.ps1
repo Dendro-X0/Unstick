@@ -50,6 +50,18 @@ foreach ($d in $Docs) {
 
 Copy-Item -Force (Join-Path $Root "scripts\Install-Autostart.ps1") $Dist -ErrorAction SilentlyContinue
 Copy-Item -Force (Join-Path $Root "scripts\Uninstall-Autostart.ps1") $Dist -ErrorAction SilentlyContinue
+if (Test-Path (Join-Path $Root "docs\RELEASE-v0.1.0.md")) {
+    Copy-Item -Force (Join-Path $Root "docs\RELEASE-v0.1.0.md") (Join-Path $Dist "RELEASE-NOTES.md")
+}
+
+# Versioned zip next to dist/
+$Ver = "0.1.0"
+$ZipName = "Unstick-$Ver-windows-x64.zip"
+$ZipPath = Join-Path $Root $ZipName
+if (Test-Path $ZipPath) { Remove-Item -Force $ZipPath }
+Compress-Archive -Path (Join-Path $Dist "*") -DestinationPath $ZipPath -CompressionLevel Optimal
 
 Write-Host "Portable package ready: $Dist"
+Write-Host "Zip: $ZipPath"
 Get-ChildItem $Dist | Format-Table Name, Length -AutoSize
+Get-Item $ZipPath | Format-Table Name, Length -AutoSize

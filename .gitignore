@@ -1,9 +1,12 @@
 /target/
 /dist/
 /.tmp/
+/Unstick-*-windows-x64.zip
 **/target/
+**/node_modules/
 **/*.pdb
 .idea/
 .vscode/
+/docs/ui-captures/
 *.swp
 .DS_Store

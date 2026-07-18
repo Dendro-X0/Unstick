@@ -19,12 +19,15 @@ use windows::Win32::System::JobObjects::{
     JOB_OBJECT_CPU_RATE_CONTROL_ENABLE, JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
 };
 #[cfg(windows)]
-use windows::Win32::System::ProcessStatus::EmptyWorkingSet;
+use windows::Win32::System::ProcessStatus::{
+    EmptyWorkingSet, GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+};
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
-    OpenProcess, SetPriorityClass, SetProcessPriorityBoost, BELOW_NORMAL_PRIORITY_CLASS,
-    IDLE_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS, PROCESS_DUP_HANDLE, PROCESS_QUERY_INFORMATION,
-    PROCESS_SET_INFORMATION, PROCESS_SET_QUOTA, PROCESS_SUSPEND_RESUME, PROCESS_TERMINATE,
+    OpenProcess, SetPriorityClass, SetProcessPriorityBoost, SetProcessWorkingSetSize,
+    ABOVE_NORMAL_PRIORITY_CLASS, BELOW_NORMAL_PRIORITY_CLASS, IDLE_PRIORITY_CLASS,
+    NORMAL_PRIORITY_CLASS, PROCESS_DUP_HANDLE, PROCESS_QUERY_INFORMATION, PROCESS_SET_INFORMATION,
+    PROCESS_SET_QUOTA, PROCESS_SUSPEND_RESUME, PROCESS_TERMINATE,
 };
 
 #[derive(Debug, Clone)]
@@ -55,6 +58,14 @@ impl SuspendLedger {
 
     pub fn contains(&self, pid: u32) -> bool {
         self.entries.contains_key(&pid)
+    }
+
+    pub fn get(&self, pid: u32) -> Option<&SuspendEntry> {
+        self.entries.get(&pid)
+    }
+
+    pub fn max_secs(&self) -> u64 {
+        self.max_secs
     }
 
     pub fn list(&self) -> Vec<SuspendEntry> {
@@ -100,7 +111,11 @@ pub struct ThrottleExecutor {
     jobs: HashMap<u32, usize>,
     job_cpu_rate_percent: u32,
     applied: HashMap<u32, ThrottleLevel>,
+    /// Currently AboveNormal-boosted foreground PID.
+    boosted_pid: Option<u32>,
     pub ledger: SuspendLedger,
+    /// After a successful resume, refuse NtSuspend for this PID until Instant.
+    suspend_cooldown_until: HashMap<u32, Instant>,
     service_pid: u32,
     #[cfg(windows)]
     nt_suspend: Option<NtFns>,
@@ -123,15 +138,91 @@ impl ThrottleExecutor {
             jobs: HashMap::new(),
             job_cpu_rate_percent: job_cpu_rate_percent.clamp(10, 100),
             applied: HashMap::new(),
+            boosted_pid: None,
             ledger: SuspendLedger::new(max_suspend_secs),
+            suspend_cooldown_until: HashMap::new(),
             service_pid: std::process::id(),
             #[cfg(windows)]
             nt_suspend: load_nt_fns(),
         }
     }
 
+    fn arm_suspend_cooldown(&mut self, pid: u32) {
+        let secs = self.ledger.max_secs().max(30);
+        self.suspend_cooldown_until
+            .insert(pid, Instant::now() + std::time::Duration::from_secs(secs));
+    }
+
+    fn suspend_on_cooldown(&mut self, pid: u32) -> bool {
+        match self.suspend_cooldown_until.get(&pid).copied() {
+            Some(until) if Instant::now() < until => true,
+            Some(_) => {
+                self.suspend_cooldown_until.remove(&pid);
+                false
+            }
+            None => false,
+        }
+    }
+
     pub fn set_job_cpu_rate(&mut self, percent: u32) {
         self.job_cpu_rate_percent = percent.clamp(10, 100);
+    }
+
+    /// Raise focused process to AboveNormal (and allow dynamic priority boosts).
+    pub fn boost_foreground(&mut self, pid: Option<u32>) {
+        match pid {
+            Some(pid) if self.boosted_pid == Some(pid) => {}
+            Some(pid) => {
+                self.clear_boost();
+                if self.apply_boost(pid).is_ok() {
+                    self.boosted_pid = Some(pid);
+                    debug!(pid, "boosted foreground AboveNormal");
+                }
+            }
+            None => self.clear_boost(),
+        }
+    }
+
+    pub fn clear_boost(&mut self) {
+        if let Some(pid) = self.boosted_pid.take() {
+            let _ = self.restore_boost(pid);
+            debug!(pid, "restored foreground boost to Normal");
+        }
+    }
+
+    #[cfg(windows)]
+    fn apply_boost(&self, pid: u32) -> anyhow::Result<()> {
+        unsafe {
+            let handle =
+                OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_INFORMATION, false, pid)
+                    .map_err(|e| anyhow::anyhow!("OpenProcess boost: {e}"))?;
+            SetPriorityClass(handle, ABOVE_NORMAL_PRIORITY_CLASS)?;
+            // false = do not disable priority boosts
+            let _ = SetProcessPriorityBoost(handle, false);
+            let _ = CloseHandle(handle);
+        }
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    fn apply_boost(&self, _pid: u32) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn restore_boost(&self, pid: u32) -> anyhow::Result<()> {
+        unsafe {
+            let handle =
+                OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_INFORMATION, false, pid)?;
+            SetPriorityClass(handle, NORMAL_PRIORITY_CLASS)?;
+            let _ = CloseHandle(handle);
+        }
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    fn restore_boost(&self, _pid: u32) -> anyhow::Result<()> {
+        Ok(())
     }
 
     /// P0: resume processes left suspended by a previous crashed service.
@@ -140,7 +231,7 @@ impl ThrottleExecutor {
         if file.entries.is_empty() {
             return Vec::new();
         }
-        let stale = ledger_is_stale(&file, self.service_pid, self.ledger.max_secs as i64);
+        let stale = ledger_is_stale(&file, self.service_pid, self.ledger.max_secs() as i64);
         info!(
             count = file.entries.len(),
             stale,
@@ -160,12 +251,23 @@ impl ThrottleExecutor {
             }
         }
         clear_suspend_ledger();
+        for (pid, _, _) in &out {
+            self.arm_suspend_cooldown(*pid);
+        }
         out
     }
 
     pub fn apply(&mut self, actions: &[PlannedAction]) -> ApplyOutcome {
         let mut out = ApplyOutcome::default();
         for action in actions {
+            // Never re-NtSuspend a PID we just released (max_suspend / recovery).
+            if action.level == ThrottleLevel::Suspend && self.suspend_on_cooldown(action.pid) {
+                debug!(
+                    pid = action.pid,
+                    "skip Suspend — post-resume cooldown active"
+                );
+                continue;
+            }
             match self.apply_one(action) {
                 Ok(()) => {
                     self.applied.insert(action.pid, action.level);
@@ -193,13 +295,20 @@ impl ThrottleExecutor {
     pub fn resume_pids(&mut self, pids: &[u32], reason: &str) -> Vec<(u32, String, String)> {
         let mut out = Vec::new();
         for &pid in pids {
-            if let Some(entry) = self.ledger.remove(pid) {
-                if let Err(e) = self.resume_one(pid) {
-                    warn!(pid, error = %e, "resume failed");
-                } else {
+            let Some(entry) = self.ledger.get(pid).cloned() else {
+                continue;
+            };
+            match self.resume_one(pid) {
+                Ok(()) => {
+                    self.ledger.remove(pid);
+                    self.applied.remove(&pid);
+                    self.arm_suspend_cooldown(pid);
                     out.push((pid, entry.name, reason.to_string()));
                 }
-                self.applied.remove(&pid);
+                Err(e) => {
+                    // Keep ledger entry so the next tick retries NtResumeProcess.
+                    warn!(pid, error = %e, "resume failed — will retry");
+                }
             }
         }
         self.persist_ledger();
@@ -212,6 +321,7 @@ impl ThrottleExecutor {
     }
 
     pub fn restore_all(&mut self) {
+        self.clear_boost();
         let _ = self.resume_all_suspended("restore_all");
         let pids: Vec<u32> = self.applied.keys().copied().collect();
         for pid in pids {
@@ -287,12 +397,38 @@ impl ThrottleExecutor {
 
             if action.apply_disk_lock {
                 self.set_io_priority(handle, 0);
-                let _ = EmptyWorkingSet(handle);
             } else if matches!(
                 action.level,
                 ThrottleLevel::BelowNormal | ThrottleLevel::Idle | ThrottleLevel::Suspend
             ) {
                 self.set_io_priority(handle, 1);
+            }
+
+            if action.apply_disk_lock || action.apply_mem_lock {
+                let _ = EmptyWorkingSet(handle);
+            }
+
+            if action.apply_mem_lock
+                && matches!(
+                    action.level,
+                    ThrottleLevel::Idle | ThrottleLevel::Suspend
+                )
+            {
+                // Hard Mem Lock: gentle max WS shrink (~60% of current, floor 32 MiB).
+                let mut pmc = PROCESS_MEMORY_COUNTERS::default();
+                if GetProcessMemoryInfo(
+                    handle,
+                    &mut pmc,
+                    std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+                )
+                .is_ok()
+                {
+                    let floor = 32usize * 1024 * 1024;
+                    let max = ((pmc.WorkingSetSize as f64) * 0.6).max(floor as f64) as usize;
+                    let _ = SetProcessWorkingSetSize(handle, usize::MAX, max);
+                }
+            } else if action.apply_disk_lock {
+                // disk-only path already emptied WS above
             }
 
             if action.apply_job_cap {

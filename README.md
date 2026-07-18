@@ -8,9 +8,18 @@ See design: [specs/backend/guardian-design.md](specs/backend/guardian-design.md)
 ## Quick start
 
 ```bash
-cargo build --release -p guardian-service -p guardian-ui
+pnpm install
+pnpm dev
+```
+
+This builds (debug) and starts `guardian-service` + `guardian-ui`. Ctrl+C stops both.
+
+Manual / release:
+
+```bash
+pnpm build
+# or: cargo build --release -p guardian-service -p guardian-ui
 ./target/release/guardian-service.exe
-# polished client (Guard / Monitor / Apps / Protect):
 ./target/release/guardian-ui.exe
 ```
 

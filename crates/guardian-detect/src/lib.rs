@@ -300,6 +300,17 @@ mod tests {
             disk_queue_length: 0.1,
             disk_io_bytes_per_sec: 0,
             hard_faults_per_sec: 1.0,
+            focus_pid: None,
+            disk_latency_sec: 0.0,
+            pagefile_writes_per_sec: 0.0,
+            paging_file_pct: 0.0,
+            dpc_time_percent: 0.0,
+            interrupt_time_percent: 0.0,
+            on_battery: false,
+            battery_percent: None,
+            cooling_mode: Default::default(),
+            cpu_mhz_ratio: 1.0,
+            thermal_level: Default::default(),
             processes: procs,
         }
     }

@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use crate::pressure::{DiskLockMode, PressureBand};
-use crate::types::{GuardianEvent, ProcessSample, ThrottleLevel};
+use crate::advisory::{CoolingMode, ThermalLevel};
+use crate::config::CriticalGuardMode;
+use crate::pressure::{DiskLockMode, MemLockMode, PressureBand};
+use crate::qos::{NapPolicy, QosClass};
+use crate::types::{FocusProfile, GuardianEvent, ProcessSample, ThrottleLevel};
 
 pub const PIPE_NAME: &str = r"\\.\pipe\unstick";
 
@@ -17,8 +20,11 @@ pub enum ClientRequest {
     RemoveWhitelist { entry: String },
     Events { limit: usize },
     SetCriticalGuard { enabled: bool },
+    SetCriticalGuardMode { mode: CriticalGuardMode },
     /// User safe disk usage: soft = Disk Lock limit I/O; hard = pause/suspend offenders.
     SetDiskSafeThresholds { soft_pct: f32, hard_pct: f32 },
+    /// User safe RAM available %: soft = WS trim; hard = deeper trim / optional Suspend.
+    SetMemSafeThresholds { soft_pct: f32, hard_pct: f32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +42,23 @@ pub struct StatusSnapshot {
     pub pause_until_unix: Option<i64>,
     #[serde(default = "default_true")]
     pub critical_guard: bool,
+    #[serde(default)]
+    pub critical_guard_mode: CriticalGuardMode,
+    #[serde(default)]
+    pub focus_pid: Option<u32>,
+    #[serde(default)]
+    pub focus_name: Option<String>,
+    #[serde(default)]
+    pub focus_profile: FocusProfile,
+    /// Planned QoS for the focused tree (Apple Energy Efficiency analogue).
+    #[serde(default)]
+    pub focus_qos: QosClass,
+    /// Planned QoS for background offenders.
+    #[serde(default)]
+    pub background_qos: QosClass,
+    /// Cooperate (SoftOnly / App Nap) vs force_pause (LastResort analogue).
+    #[serde(default)]
+    pub nap_policy: NapPolicy,
     pub pressure_score: f32,
     pub pressure_band: PressureBand,
     #[serde(default)]
@@ -58,11 +81,58 @@ pub struct StatusSnapshot {
     /// Learned peak useful throughput (bytes/sec).
     #[serde(default)]
     pub disk_peak_io_bps: f32,
+    #[serde(default)]
+    pub mem_lock: MemLockMode,
+    #[serde(default)]
+    pub mem_lock_soft_pct: f32,
+    #[serde(default)]
+    pub mem_lock_hard_pct: f32,
     pub cpu_percent: f32,
     pub memory_available_bytes: u64,
     pub memory_total_bytes: u64,
     pub disk_busy_percent: f32,
     pub disk_queue_length: f32,
+    /// Avg. Disk sec/Transfer (system volume PhysicalDisk).
+    #[serde(default)]
+    pub disk_latency_sec: f32,
+    #[serde(default)]
+    pub hard_faults_per_sec: f32,
+    #[serde(default)]
+    pub pagefile_writes_per_sec: f32,
+    #[serde(default)]
+    pub paging_file_pct: f32,
+    #[serde(default)]
+    pub dpc_time_percent: f32,
+    #[serde(default)]
+    pub interrupt_time_percent: f32,
+    /// Detect-only: elevated DPC/ISR (Unstick cannot fix).
+    #[serde(default)]
+    pub dpc_advisory: Option<String>,
+    /// PSI-shaped stall fractions (0..1).
+    #[serde(default)]
+    pub stall_cpu: f32,
+    #[serde(default)]
+    pub stall_memory: f32,
+    #[serde(default)]
+    pub stall_io: f32,
+    #[serde(default)]
+    pub stall_memory_full: f32,
+    #[serde(default)]
+    pub stall_io_full: f32,
+    #[serde(default)]
+    pub stall_thermal: f32,
+    #[serde(default)]
+    pub on_battery: bool,
+    #[serde(default)]
+    pub battery_percent: Option<u8>,
+    #[serde(default)]
+    pub cooling_mode: CoolingMode,
+    #[serde(default)]
+    pub cpu_mhz_ratio: f32,
+    #[serde(default)]
+    pub thermal_level: ThermalLevel,
+    #[serde(default)]
+    pub thermal_advisory: Option<String>,
     pub top_processes: Vec<ProcessSample>,
     pub recent_throttles: Vec<ThrottleSummary>,
     pub recent_abuse: Vec<AbuseSummary>,
