@@ -1,4 +1,4 @@
-# Unstick — User Guide (v0.1)
+# Unstick — User Guide (v0.2)
 
 ## What it does
 
@@ -70,6 +70,12 @@ On the **Guard** tab under Controls:
 - Click **Apply RAM thresholds**
 
 Presets: `15 / 8` or earlier `20 / 10`. Mem Lock does **not** clear the standby cache.
+
+Mem Lock **Hard** only latches when available/commit thresholds are met **and** paging evidence is present (quiet IDE/git mapped I/O should not Hard-latch). SoftOnly never Suspends from Mem Lock.
+
+### Event log
+
+On the **Monitor** tab, the **Event log** shows recent throttle / suspend / resume / info lines from this session (and `events.jsonl` after a service restart).
 
 ## Whitelist
 

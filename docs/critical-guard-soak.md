@@ -1,4 +1,4 @@
-# Critical Guard soak checklist (L3 / L4)
+{69E6BE21-64E1-494F-BA33-52CF702682A6}.png# Critical Guard soak checklist (L3 / L4)
 
 ## L3 — Freeze prevention soak
 

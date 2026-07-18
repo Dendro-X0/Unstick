@@ -53,7 +53,7 @@ function Invoke-SignBinaries {
         $signtool = $signtool.Source
     }
     if (-not $signtool) {
-        throw "signtool.exe not found (install Windows SDK) — required for -Sign"
+        throw "signtool.exe not found (install Windows SDK) - required for -Sign"
     }
     $thumb = $env:UNSTICK_SIGN_THUMBPRINT
     foreach ($b in $Bins) {
@@ -96,6 +96,7 @@ foreach ($d in $Docs) {
 Copy-Item -Force (Join-Path $Root "scripts\Install-Autostart.ps1") $Dist -ErrorAction SilentlyContinue
 Copy-Item -Force (Join-Path $Root "scripts\Uninstall-Autostart.ps1") $Dist -ErrorAction SilentlyContinue
 $releaseNotes = @(
+    "docs\RELEASE-v0.2.0.md",
     "docs\RELEASE-v0.1.2.md",
     "docs\RELEASE-v0.1.1.md",
     "docs\RELEASE-v0.1.0.md"
@@ -118,7 +119,7 @@ Public Latest releases require: pwsh -File scripts/Package-Portable.ps1 -Sign
 }
 
 # Versioned zip next to dist/ (workspace.package.version)
-$Ver = "0.1.2"
+$Ver = "0.2.0"
 $cargoToml = Get-Content (Join-Path $Root "Cargo.toml") -Raw
 if ($cargoToml -match '(?m)^version\s*=\s*"([^"]+)"') {
     $Ver = $Matches[1]

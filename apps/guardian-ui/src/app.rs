@@ -3,8 +3,9 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 use guardian_core::{
-    load_config, status_path, ApplyDeniedSummary, ClientRequest, CriticalGuardMode, DiskLockMode,
-    GuardianConfig, MemLockMode, PressureBand, ServerPush, StatusSnapshot, ThrottleSummary,
+    load_config, read_recent_events, status_path, ApplyDeniedSummary, ClientRequest,
+    CriticalGuardMode, DiskLockMode, GuardianConfig, GuardianEvent, MemLockMode, PressureBand,
+    ServerPush, StatusSnapshot,
 };
 
 use crate::client;
@@ -24,6 +25,7 @@ enum Tab {
 
 struct SharedUi {
     status: Option<StatusSnapshot>,
+    events: Vec<GuardianEvent>,
     online: bool,
     last_error: Option<String>,
     toast: Option<(String, Instant)>,
@@ -67,6 +69,7 @@ impl UnstickApp {
 
         let shared = Arc::new(Mutex::new(SharedUi {
             status: None,
+            events: Vec::new(),
             online: false,
             last_error: None,
             toast: None,
@@ -139,6 +142,24 @@ impl UnstickApp {
                             g.status = Some(s);
                         }
                     }
+
+                    match client::request(ClientRequest::Events { limit: 40 }).await {
+                        Ok(ServerPush::Events { events }) => {
+                            if let Ok(mut g) = shared_bg.lock() {
+                                g.events = events;
+                            }
+                        }
+                        Err(_) => {
+                            let file_ev = read_recent_events(40);
+                            if let Ok(mut g) = shared_bg.lock() {
+                                if !file_ev.is_empty() {
+                                    g.events = file_ev;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+
                     tokio::time::sleep(Duration::from_millis(900)).await;
                 }
             });
@@ -188,11 +209,12 @@ impl eframe::App for UnstickApp {
         chrome::title_bar(ctx);
         chrome::paint_window_border(ctx);
 
-        let (status, online, toast) = {
+        let (status, events, online, toast) = {
             let g = self.shared.lock().ok();
             let g = g.as_ref();
             (
                 g.and_then(|x| x.status.clone()),
+                g.map(|x| x.events.clone()).unwrap_or_default(),
                 g.map(|x| x.online).unwrap_or(false),
                 g.and_then(|x| x.toast.clone()),
             )
@@ -370,7 +392,7 @@ impl eframe::App for UnstickApp {
 
                 match self.tab {
                     Tab::Guard => self.ui_guard(ui, status.as_ref()),
-                    Tab::Monitor => self.ui_monitor(ui, status.as_ref()),
+                    Tab::Monitor => self.ui_monitor(ui, status.as_ref(), &events),
                     Tab::Apps => self.ui_apps(ui),
                     Tab::Protect => self.ui_protect(ui, status.as_ref()),
                 }
@@ -859,7 +881,12 @@ impl UnstickApp {
         });
     }
 
-    fn ui_monitor(&mut self, ui: &mut egui::Ui, status: Option<&StatusSnapshot>) {
+    fn ui_monitor(
+        &mut self,
+        ui: &mut egui::Ui,
+        status: Option<&StatusSnapshot>,
+        events: &[GuardianEvent],
+    ) {
         ui.label(egui::RichText::new("Live consumers").size(18.0).strong().color(TEXT));
         ui.label(theme::dim("Ranked by CPU — soft-throttle targets non-protected offenders"));
         ui.add_space(12.0);
@@ -954,13 +981,24 @@ impl UnstickApp {
         });
 
         ui.add_space(12.0);
-        ui.label(egui::RichText::new("Recent throttles").strong().color(TEXT_DIM));
-        if s.recent_throttles.is_empty() {
-            ui.label(theme::dim("None this session"));
+        ui.label(
+            egui::RichText::new("Event log")
+                .strong()
+                .color(TEXT_DIM),
+        );
+        ui.label(theme::dim("Last actions from this session / events.jsonl"));
+        ui.add_space(6.0);
+        if events.is_empty() {
+            ui.label(theme::dim("None yet — Guard actions appear here"));
         } else {
-            for t in s.recent_throttles.iter().take(6) {
-                throttle_row(ui, t);
-            }
+            egui::ScrollArea::vertical()
+                .id_salt("event_log")
+                .max_height(180.0)
+                .show(ui, |ui| {
+                    for ev in events.iter().take(40) {
+                        event_row(ui, ev);
+                    }
+                });
         }
     }
 
@@ -1091,13 +1129,74 @@ fn shorten_toast(msg: &str) -> String {
     }
 }
 
-fn throttle_row(ui: &mut egui::Ui, t: &ThrottleSummary) {
+fn event_row(ui: &mut egui::Ui, ev: &GuardianEvent) {
+    let (kind, detail, when) = match ev {
+        GuardianEvent::Pressure { band, score, at } => (
+            "pressure",
+            format!("{band} ({score:.2})"),
+            at.format("%H:%M:%S").to_string(),
+        ),
+        GuardianEvent::Throttle {
+            name,
+            pid,
+            level,
+            reason,
+            at,
+        } => (
+            "throttle",
+            format!("{name} pid {pid} {:?} · {reason}", level),
+            at.format("%H:%M:%S").to_string(),
+        ),
+        GuardianEvent::Suspend {
+            name,
+            pid,
+            reason,
+            at,
+        } => (
+            "suspend",
+            format!("{name} pid {pid} · {reason}"),
+            at.format("%H:%M:%S").to_string(),
+        ),
+        GuardianEvent::Resume {
+            name,
+            pid,
+            reason,
+            at,
+        } => (
+            "resume",
+            format!("{name} pid {pid} · {reason}"),
+            at.format("%H:%M:%S").to_string(),
+        ),
+        GuardianEvent::Abuse {
+            name,
+            pid,
+            score,
+            reasons,
+            at,
+        } => (
+            "abuse",
+            format!("{name} pid {pid} score {score} · {}", reasons.join(",")),
+            at.format("%H:%M:%S").to_string(),
+        ),
+        GuardianEvent::Info { message, at } => {
+            ("info", message.clone(), at.format("%H:%M:%S").to_string())
+        }
+    };
+    let color = match kind {
+        "suspend" | "abuse" => CORAL,
+        "throttle" => theme::AMBER,
+        "resume" => TEAL,
+        _ => TEXT_DIM,
+    };
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(&t.name).color(TEXT));
-        ui.label(egui::RichText::new(format!("pid {}", t.pid)).color(TEXT_DIM));
-        ui.label(egui::RichText::new(format!("{:?}", t.level)).color(AMBER_SAFE));
-        ui.label(egui::RichText::new(&t.reason).color(TEXT_DIM));
+        ui.label(egui::RichText::new(&when).monospace().size(11.0).color(TEXT_DIM));
+        ui.label(
+            egui::RichText::new(kind.to_uppercase())
+                .size(11.0)
+                .strong()
+                .color(color),
+        );
+        ui.label(egui::RichText::new(detail).size(12.0).color(TEXT));
     });
 }
 
-const AMBER_SAFE: egui::Color32 = theme::AMBER;

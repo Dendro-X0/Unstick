@@ -7,11 +7,11 @@ use anyhow::Result;
 use chrono::Utc;
 use guardian_core::{
     classify_dpc_isr, classify_focus_profile, dpc_advisory_message, dpc_isr_raw_level,
-    events_path, load_config, save_config, score_pressure_tracked, status_path,
-    thermal_advisory_message, ActionPlan, ApplyDeniedSummary, ClientRequest, CriticalGuardMode,
-    DiskCalibrator, DiskLockMode, GuardianConfig, GuardianEvent, HysteresisTracker, MemLockMode,
-    MemLockThresholds, PressureBand, PressureInputs, PressureState, ServerPush, StatusSnapshot,
-    SuspendedSummary, ThrottleLevel, AbuseSummary, ThrottleSummary, plan_qos,
+    events_path, load_config, recent_events_for_client, save_config, score_pressure_tracked,
+    status_path, thermal_advisory_message, ActionPlan, ApplyDeniedSummary, ClientRequest,
+    CriticalGuardMode, DiskCalibrator, DiskLockMode, GuardianConfig, GuardianEvent, HysteresisTracker,
+    MemLockMode, MemLockThresholds, PressureBand, PressureInputs, PressureState, ServerPush,
+    StatusSnapshot, SuspendedSummary, ThrottleLevel, AbuseSummary, ThrottleSummary, plan_qos,
 };
 use guardian_detect::{apply_parent_anomaly, AbuseDetector};
 use guardian_win::{elevation_likely, ThrottleExecutor, WinSensor};
@@ -260,13 +260,7 @@ impl ServiceInner {
                 }
             }
             ClientRequest::Events { limit } => {
-                let events: Vec<_> = self
-                    .recent_events
-                    .iter()
-                    .rev()
-                    .take(limit.max(1))
-                    .cloned()
-                    .collect();
+                let events = recent_events_for_client(&self.recent_events, limit);
                 ServerPush::Events { events }
             }
             ClientRequest::SetCriticalGuard { enabled } => {

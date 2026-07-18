@@ -1851,7 +1851,7 @@ dependencies = [
 
 [[package]]
 name = "guardian-core"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "serde",
@@ -1861,7 +1861,7 @@ dependencies = [
 
 [[package]]
 name = "guardian-detect"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "guardian-core",
@@ -1870,14 +1870,14 @@ dependencies = [
 
 [[package]]
 name = "guardian-mac"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "guardian-core",
 ]
 
 [[package]]
 name = "guardian-service"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1895,7 +1895,7 @@ dependencies = [
 
 [[package]]
 name = "guardian-tray"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1913,7 +1913,7 @@ dependencies = [
 
 [[package]]
 name = "guardian-ui"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "eframe",
@@ -1928,7 +1928,7 @@ dependencies = [
 
 [[package]]
 name = "guardian-win"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",

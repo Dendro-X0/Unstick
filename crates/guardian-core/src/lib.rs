@@ -2,6 +2,7 @@
 
 mod config;
 mod disk_calibrate;
+mod events;
 mod ipc;
 mod advisory;
 mod policy;
@@ -19,6 +20,7 @@ pub use config::{
     status_path,
 };
 pub use disk_calibrate::{saturation_index, DiskCalibrator};
+pub use events::{read_recent_events, recent_events_for_client};
 pub use ipc::{
     AbuseSummary, ApplyDeniedSummary, ClientRequest, ServerPush, StatusSnapshot, SuspendedSummary,
     ThrottleSummary, PIPE_NAME,

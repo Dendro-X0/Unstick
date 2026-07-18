@@ -1,7 +1,7 @@
 # Unstick — start here
 
 1. Design: [specs/backend/guardian-design.md](../specs/backend/guardian-design.md)
-2. **Roadmaps:** [next release](roadmap-next-release.md) · [v0.1 detail](roadmap-v0.1.md) · [v0.1.2 release](RELEASE-v0.1.2.md)
+2. **Roadmaps:** [next release](roadmap-next-release.md) · [v0.1 detail](roadmap-v0.1.md) · [v0.2.0 release](RELEASE-v0.2.0.md)
 3. **User guide:** [USER-GUIDE.md](USER-GUIDE.md)
 4. UI: [frontend-spec.md](frontend-spec.md)
 5. Dev loop:

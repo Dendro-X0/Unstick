@@ -104,7 +104,7 @@ Hero also shows **Focus · app.exe** when the service reports a foreground proce
 | Tab | Purpose | Data |
 |-----|---------|------|
 | Guard | Arm/disarm protection; primary CTA + collapsed controls | status + Pause/Resume + SetCriticalGuard + SetCriticalGuardMode + SetDiskSafeThresholds |
-| Monitor | Top processes, sparklines, recent throttles | status |
+| Monitor | Top processes, sparklines, event log | status + `Events { limit }` / events.jsonl |
 | Whitelist | Never-throttle / never-suspend entries | AddWhitelist / RemoveWhitelist |
 | Protect | Abuse/miner alert summary + trust actions | recent_abuse + TrustPid |
 
@@ -118,7 +118,7 @@ See what is consuming the machine.
 2. CPU + DISK sparklines
 3. Suspended list (if any)
 4. Scrollable top-process rows: cpu%, pid, name, mem, Whitelist action
-5. Recent throttle events (last few) — empty state: “None this session”
+5. **Event log** — last ~40 from session / `events.jsonl` (throttle, suspend, resume, info)
 
 ## Page: Whitelist
 
@@ -156,7 +156,7 @@ Segmented LED-style bars (teal). Amber/coral fill when >70% / >85%.
 
 | UI action | IPC |
 |-----------|-----|
-| Refresh (1s timer) | `GetStatus` or status.json |
+| Refresh (1s timer) | `GetStatus` + `Events { limit: 40 }` or status.json / events.jsonl |
 | CTA pause | `Pause { minutes: 15 }` |
 | CTA resume | `Resume` |
 | Trust | `TrustPid` |
