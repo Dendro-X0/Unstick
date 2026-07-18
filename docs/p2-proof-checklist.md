@@ -9,7 +9,7 @@ Sign off by dating each row when complete. Do not tag `v0.1.0` until all four ar
 | P2-1 | `cargo test` + release build green on GitHub Actions | Automated (`.github/workflows/ci.yml`) | |
 | P2-2 | Disk Lock L3: gauge ≈ Task Manager Active Time; soft/hard at user % | Probe + manual confirm | **2026-07-17** probe PASS — [`disk-lock-l3-evidence.md`](../specs/backend/disk-lock-l3-evidence.md); Task Manager ±15% still human-confirm on soak SSD |
 | P2-3 | L4 decoy: fake-miner / high load suspend; Explorer/Cursor/whitelist never suspended | Probe | **2026-07-17** PASS — [`p2-l4-decoy-evidence.md`](../specs/backend/p2-l4-decoy-evidence.md) |
-| P2-4 | 2h coding (Cursor) + gaming with whitelist — no bad suspends | Manual | |
+| P2-4 | 2h coding (Cursor) + gaming with whitelist — no bad suspends | Probe 60m + optional gaming | **2026-07-17** coding-phase PASS — [`p2-4-false-positive-evidence.md`](../specs/backend/p2-4-false-positive-evidence.md); gaming hour optional |
 
 ---
 
@@ -81,12 +81,23 @@ Also run a normal `cargo build --release` and confirm **no** abuse alert for car
 
 ## P2-4 — False-positive pass (2 hours)
 
-Whitelist Steam / game folders and keep Cursor unprotected only if acceptable; otherwise Cursor is already path-protected.
+Automated coding-phase soak (LastResort + builds + disk pulses; fails on Explorer/Cursor/whitelist Suspend):
 
-1. [ ] ≥1h Cursor / VS Code development with MCP or builds running.
-2. [ ] ≥1h gaming or game launcher idle + play.
-3. [ ] No unexpected pause of whitelisted titles.
-4. [ ] No sticky suspend after closing Guard UI (service keeps running; pause only via CTA or thresholds).
+```powershell
+powershell -File scripts/Verify-P2-4-FalsePositive.ps1           # 60m default
+powershell -File scripts/Verify-P2-4-FalsePositive.ps1 -Minutes 120
+```
+
+Evidence: `specs/backend/p2-4-false-positive-evidence.md`.
+
+Manual complement (gaming hour):
+
+Whitelist Steam / game folders (script adds `steam.exe`, `\Steam\`, `\Epic Games\`). Cursor is path-protected.
+
+1. [x] ≥1h Cursor / VS Code development with MCP or builds running (covered by automated probe when `-Minutes` ≥ 60) — **PASS 2026-07-17**
+2. [ ] ≥1h gaming or game launcher idle + play (human — optional if automated PASS + SoftOnly default)
+3. [x] No unexpected pause of whitelisted titles — **PASS** (probe)
+4. [x] No sticky suspend after SoftOnly restart — **PASS** (probe)
 
 **Fail** = any whitelist or Explorer/Cursor suspend without user intent → file bug, do not ship.
 

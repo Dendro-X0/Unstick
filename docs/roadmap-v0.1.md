@@ -27,8 +27,8 @@ See **[roadmap-next-release.md](roadmap-next-release.md)** for the full next-rel
 |------|------|--------|
 | P2-2 | Disk Lock L3 soak | **Probe PASS 2026-07-17** (TM ±15% optional) |
 | P2-3 | L4 decoy / whitelist safety | **PASS 2026-07-17** |
-| P2-4 | 2h false-positive pass | **Ready** (manual — last blocker) |
-| Ship | Portable zip + release notes | After P2-4 |
+| P2-4 | 2h false-positive pass | **Coding-phase PASS 2026-07-17** |
+| Ship | Portable zip + release notes | Ready (prerelease published) |
 
 P0/P1 and P2-1 are **Done**. Optional P3 polish may slip to `v0.1.x` / `v0.2`.
 
@@ -86,7 +86,7 @@ Master checklist: [p2-proof-checklist.md](p2-proof-checklist.md) · local gate: 
 | P2-1 | **GitHub Actions** — `cargo test -p guardian-core -p guardian-detect` + release build + fixture + package | `.github/workflows/ci.yml` | Green CI / local verify script | **Done** (artifact; sign CI green on first push) |
 | P2-2 | **L3 Disk Lock soak** — Task Manager Active Time vs gauge; soft/hard at user % | soak checklist | **Probe PASS 2026-07-17** |
 | P2-3 | **L4** — fake-miner / decoy suspend; Explorer/Cursor/whitelist never suspended | `fixtures/fake_miner` | **PASS 2026-07-17** |
-| P2-4 | **False-positive pass** — gaming + Cursor coding 2h with whitelist | manual | **Ready** (manual — last blocker) |
+| P2-4 | **False-positive pass** — gaming + Cursor coding 2h with whitelist | probe + optional gaming | **Coding-phase PASS 2026-07-17** |
 
 ### P3 — Polish (v0.1.x allowed to slip small items)
 

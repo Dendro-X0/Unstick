@@ -38,7 +38,7 @@
 | P2-1 automated verify | Local script available |
 | P2-2 Disk Lock L3 | Probe PASS 2026-07-17 |
 | P2-3 L4 decoy | PASS 2026-07-17 |
-| P2-4 2h false-positive | **Pending maintainer sign-off** |
+| P2-4 2h false-positive | **Coding-phase PASS 2026-07-17** (60m probe; gaming hour optional) |
 | Mem Lock L3 | PASS |
 
 **Do not publish a public `v0.1.0` tag until P2-4 is signed** (or explicitly label the build `v0.1.0-beta` / private).

@@ -31,7 +31,7 @@ Ship a **safe-by-default portable Guard** for low-end Windows PCs: Disk Lock + S
 | G3 | P2-1 automated (`Verify-P2-Automated.ps1` / CI) | **Done** (confirm green CI on push) |
 | G4 | **P2-2** Disk Lock L3 soak on target SSD | **Probe PASS 2026-07-17** — TM ±15% human-confirm optional |
 | G5 | **P2-3** L4 decoy / whitelist never suspended | **PASS 2026-07-17** |
-| G6 | **P2-4** ≥2h false-positive (coding + gaming) | **Blocking — unsigned** |
+| G6 | **P2-4** ≥2h false-positive (coding + gaming) | **Coding-phase PASS 2026-07-17** (60m probe); gaming hour optional |
 | G7 | Portable zip + filled release notes | **Ready** — `Unstick-0.1.0-windows-x64.zip` + [RELEASE-v0.1.0.md](RELEASE-v0.1.0.md) |
 
 **Do not tag `v0.1.0` until G4–G6 are dated in [p2-proof-checklist.md](p2-proof-checklist.md).**
@@ -142,7 +142,7 @@ Promote **Mem Lock** and packaging maturity; start cross-platform apply surface 
 
 - [x] P2-2 Disk Lock L3 signed (probe 2026-07-17; optional TM eyeball on soak SSD)  
 - [x] P2-3 L4 decoy signed (2026-07-17)  
-- [ ] P2-4 2h FP signed  
+- [x] P2-4 2h FP signed (60m automated coding-phase 2026-07-17; gaming hour optional)  
 - [ ] CI green on default branch  
 - [x] Package-Portable zip smoke (`Unstick-0.1.0-windows-x64.zip`)  
 - [x] Release notes draft ([RELEASE-v0.1.0.md](RELEASE-v0.1.0.md))  

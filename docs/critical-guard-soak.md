@@ -56,6 +56,16 @@ cargo run --release --manifest-path fixtures/fake_miner/Cargo.toml -- stratum+tc
 3. Confirm `explorer.exe` / Cursor never appear in suspended list.
 4. Events in `%LOCALAPPDATA%\Unstick\events.jsonl` include `Suspend` / `Resume`.
 
+## L4b — False-positive soak (P2-4)
+
+```powershell
+powershell -File scripts/Verify-P2-4-FalsePositive.ps1 -Minutes 60
+```
+
+LastResort under periodic `cargo test` + disk-hog pulses. Fails if Explorer / Cursor / Steam whitelist / shells are suspended or Cursor/Explorer are soft-throttled. Ends with SoftOnly restart sticky check.
+
+Optional human gaming hour still recommended before a non-prerelease public tag.
+
 ## Automated
 
 ```bash
