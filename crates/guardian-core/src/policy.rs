@@ -64,6 +64,15 @@ impl ProtectedSet {
             "msedgewebview2.exe",
             "firefox.exe",
             "brave.exe",
+            // Windows Defender / security — elevated; apply always Access Denied noise.
+            "msmpeng.exe",
+            "mssense.exe",
+            "nissrv.exe",
+            "securityhealthservice.exe",
+            "securityhealthsystray.exe",
+            "smartscreen.exe",
+            "mpcmdrun.exe",
+            "wdsealthealth.exe",
             // IDEs — must match by name when path is gated (v0.1.2 self-overhead).
             "cursor.exe",
             "code.exe",
@@ -548,6 +557,33 @@ mod tests {
             "Cursor must not receive mem_lock without path"
         );
         assert!(plan.actions.iter().any(|a| a.pid == 8 && a.apply_mem_lock));
+    }
+
+    #[test]
+    fn msmpeng_never_mem_locked() {
+        let cfg = GuardianConfig::default();
+        let engine = PolicyEngine::new(&cfg, 1);
+        let sample = sample_with(vec![ProcessSample {
+            pid: 9,
+            parent_pid: 1,
+            name: "MsMpEng.exe".into(),
+            path: Some(r"C:\ProgramData\Microsoft\Windows Defender\Platform\MsMpEng.exe".into()),
+            cpu_percent: 40.0,
+            memory_bytes: 800_000_000,
+            disk_read_bytes_per_sec: 0,
+            disk_write_bytes_per_sec: 0,
+            cmd_line: None,
+        }]);
+        let plan = engine.plan(
+            PressureBand::Throttle,
+            &sample,
+            None,
+            DiskLockMode::Soft,
+            MemLockMode::Hard,
+            0,
+            ThermalLevel::Nominal,
+        );
+        assert!(plan.actions.iter().all(|a| a.pid != 9));
     }
 
     #[test]

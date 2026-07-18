@@ -657,7 +657,7 @@ impl UnstickApp {
                         let elev = denied.iter().filter(|d| d.elevation_likely).count();
                         let msg = if elev > 0 {
                             format!(
-                                "Could not control {elev} elevated process(es) — run Guard as admin or whitelist them"
+                                "{elev} elevated process(es) skipped (e.g. Defender) — normal unless you need admin Guard"
                             )
                         } else {
                             format!("Could not apply limits to {} process(es)", denied.len())

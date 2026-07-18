@@ -22,3 +22,4 @@ dirs = { workspace = true }
 tray-icon = "0.19"
 tao = "0.30"
 open = "5"
+notify-rust = "4"

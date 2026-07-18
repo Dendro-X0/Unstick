@@ -147,6 +147,8 @@ async fn run_tray() -> Result<()> {
     });
 
     let menu_channel = MenuEvent::receiver();
+    let mut prev_disk_hard = false;
+    let mut prev_mem_hard = false;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::WaitUntil(
@@ -183,14 +185,40 @@ async fn run_tray() -> Result<()> {
         if let Some(s) = last_status.lock().ok().and_then(|g| g.clone()) {
             let band = s.pressure_band.as_str();
             let tip = format!(
-                "Unstick [{band}] score={:.2} cpu={:.0}%",
-                s.pressure_score, s.cpu_percent
+                "Unstick [{band}] score={:.2} cpu={:.0}% disk={} mem={}",
+                s.pressure_score,
+                s.cpu_percent,
+                s.disk_lock.as_str(),
+                s.mem_lock.as_str()
             );
             let _ = tray.set_tooltip(Some(tip));
             status_item.set_text(format!(
-                "[{band}] cpu={:.0}% score={:.2}",
-                s.cpu_percent, s.pressure_score
+                "[{band}] cpu={:.0}% disk={} mem={}",
+                s.cpu_percent,
+                s.disk_lock.as_str(),
+                s.mem_lock.as_str()
             ));
+
+            // P3-1: toast when Disk/Mem Lock enters HARD.
+            use guardian_core::{DiskLockMode, MemLockMode};
+            let disk_hard = s.disk_lock == DiskLockMode::Hard;
+            let mem_hard = s.mem_lock == MemLockMode::Hard;
+            if disk_hard && !prev_disk_hard {
+                let _ = notify_rust::Notification::new()
+                    .summary("Unstick — Disk Lock HARD")
+                    .body("OS drive under heavy load; background I/O limited.")
+                    .timeout(notify_rust::Timeout::Milliseconds(6000))
+                    .show();
+            }
+            if mem_hard && !prev_mem_hard {
+                let _ = notify_rust::Notification::new()
+                    .summary("Unstick — Mem Lock HARD")
+                    .body("RAM pressure with paging; trimming background working sets.")
+                    .timeout(notify_rust::Timeout::Milliseconds(6000))
+                    .show();
+            }
+            prev_disk_hard = disk_hard;
+            prev_mem_hard = mem_hard;
         }
 
         if let Event::NewEvents(_) = &event {

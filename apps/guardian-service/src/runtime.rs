@@ -77,6 +77,8 @@ pub struct ServiceInner {
     pub last_thermal_advisory_at: Option<Instant>,
     /// Last time `status.json` was written (throttled on Normal).
     pub last_status_write: Option<Instant>,
+    /// Rate-limit elevated apply_denied Info events.
+    pub last_elev_denied_log: Option<Instant>,
 }
 
 impl ServiceInner {
@@ -112,6 +114,7 @@ impl ServiceInner {
             last_dpc_advisory_at: None,
             last_thermal_advisory_at: None,
             last_status_write: None,
+            last_elev_denied_log: None,
         })
     }
 
@@ -631,10 +634,16 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
                 .collect();
             if !g.apply_denied.is_empty() {
                 let elev = g.apply_denied.iter().filter(|d| d.elevation_likely).count();
-                if elev > 0 {
+                // Rate-limit: elevated Access Denied is expected for AV leftovers.
+                let should_log = elev > 0
+                    && g.last_elev_denied_log
+                        .map(|t| t.elapsed() >= Duration::from_secs(300))
+                        .unwrap_or(true);
+                if should_log {
+                    g.last_elev_denied_log = Some(Instant::now());
                     g.push_event(GuardianEvent::Info {
                         message: format!(
-                            "{elev} process(es) blocked (likely need admin / elevated target)"
+                            "{elev} elevated process(es) skipped (Defender/AV-style Access Denied is expected)"
                         ),
                         at: Utc::now(),
                     });

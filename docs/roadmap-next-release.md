@@ -69,10 +69,10 @@ Promote **Mem Lock** and packaging maturity; start cross-platform apply surface 
 
 | ID | Work | Depends on | Proof |
 |----|------|------------|-------|
-| M1 | Mem Lock L4 soak checklist + sign-off | v0.1.2 tagged | Manual matrix |
-| M2 | Soften MsMpEng / elevated apply noise (status copy or skip list) | Soak feedback | Fewer false amber warnings |
-| M3 | MSI/MSIX **or** signed update channel | Signing cert | Clean install/uninstall |
-| M4 | P3-1 Tray balloon on Disk/Mem Lock HARD | — | Manual |
+| M1 | Mem Lock L4 soak checklist + sign-off | v0.1.2 tagged | **Done** |
+| M2 | Soften MsMpEng / elevated apply noise (status copy or skip list) | Soak feedback | **Done** — Defender skip list + softer copy |
+| M3 | MSI/MSIX **or** signed update channel | Signing cert | Design + `-Sign` scaffolding; cert pending |
+| M4 | P3-1 Tray balloon on Disk/Mem Lock HARD | — | **Done** — tray toast on HARD enter |
 | M5 | P3-2 Event viewer (last N from `events.jsonl`) | — | UI + L1 |
 | M6 | `guardian-mac` pthread/GCD QoS + Nap cooperate (no Suspend analogue) | macOS build host | L1 + smoke on Darwin |
 | M7 | Docs: v0.2 USER-GUIDE + changelog | M1–M3 | Peer read |
@@ -110,7 +110,7 @@ Promote **Mem Lock** and packaging maturity; start cross-platform apply surface 
 **Before `v0.2.0`:**
 
 - [x] Mem Lock L4 FP signed ([mem-lock-l4-evidence.md](../specs/backend/mem-lock-l4-evidence.md))  
-- [ ] Installer or signed update path ([v0.2-packaging-design.md](../specs/backend/v0.2-packaging-design.md) locked: portable zip)  
-- [ ] Code signing for public assets  
+- [x] Portable update story + `Package-Portable.ps1 -Sign` scaffolding  
+- [ ] Code signing for public assets (cert / `UNSTICK_SIGN_THUMBPRINT`)  
 - [ ] Optional Darwin QoS apply smoke  
 - [ ] Tag `v0.2.0`
