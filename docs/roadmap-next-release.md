@@ -1,8 +1,8 @@
 # Unstick — next release roadmap
 
-**Next tag:** `v0.1.0` (portable Windows beta)  
-**Then:** `v0.2.0` (Mem Lock as a marketed pillar + installer)  
-**Canonical v0.1 detail:** [roadmap-v0.1.md](roadmap-v0.1.md) · **Proof checklist:** [p2-proof-checklist.md](p2-proof-checklist.md)
+**Shipped:** `v0.1.0`, `v0.1.1`  
+**Next tag:** `v0.2.0` (Mem Lock L4 + installer + signing)  
+**Canonical v0.1 detail:** [roadmap-v0.1.md](roadmap-v0.1.md) · **Proof checklist:** [p2-proof-checklist.md](p2-proof-checklist.md) · **v0.1.1 notes:** [RELEASE-v0.1.1.md](RELEASE-v0.1.1.md)
 
 ```mermaid
 flowchart LR

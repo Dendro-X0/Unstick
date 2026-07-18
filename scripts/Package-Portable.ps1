@@ -50,12 +50,14 @@ foreach ($d in $Docs) {
 
 Copy-Item -Force (Join-Path $Root "scripts\Install-Autostart.ps1") $Dist -ErrorAction SilentlyContinue
 Copy-Item -Force (Join-Path $Root "scripts\Uninstall-Autostart.ps1") $Dist -ErrorAction SilentlyContinue
-if (Test-Path (Join-Path $Root "docs\RELEASE-v0.1.0.md")) {
+if (Test-Path (Join-Path $Root "docs\RELEASE-v0.1.1.md")) {
+    Copy-Item -Force (Join-Path $Root "docs\RELEASE-v0.1.1.md") (Join-Path $Dist "RELEASE-NOTES.md")
+} elseif (Test-Path (Join-Path $Root "docs\RELEASE-v0.1.0.md")) {
     Copy-Item -Force (Join-Path $Root "docs\RELEASE-v0.1.0.md") (Join-Path $Dist "RELEASE-NOTES.md")
 }
 
 # Versioned zip next to dist/
-$Ver = "0.1.0"
+$Ver = "0.1.1"
 $ZipName = "Unstick-$Ver-windows-x64.zip"
 $ZipPath = Join-Path $Root $ZipName
 if (Test-Path $ZipPath) { Remove-Item -Force $ZipPath }
