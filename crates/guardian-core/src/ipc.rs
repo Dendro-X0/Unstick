@@ -129,12 +129,12 @@ pub struct StatusSnapshot {
     /// D2: idle-calibrated hardware envelope + live u_disk / u_mem.
     #[serde(default)]
     pub envelope: EnvelopeSnapshot,
-    /// D3: disk closed-loop intensity 0..=2 (soft ceiling).
+    /// D3/D6: disk closed-loop intensity 0..=3 (3 = Efficiency Idle when gated).
     #[serde(default)]
     pub disk_control_intensity: u8,
     #[serde(default)]
     pub disk_control_mode: DiskControlMode,
-    /// D4: memory closed-loop intensity 0..=2 (WS trim requires paging evidence).
+    /// D4: memory closed-loop intensity 0..=3 (3 = Efficiency Idle when gated; WS trim requires paging).
     #[serde(default)]
     pub mem_control_intensity: u8,
     #[serde(default)]

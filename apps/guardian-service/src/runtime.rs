@@ -421,6 +421,14 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
     g.envelope_cal.sync_from_config(&cfg);
     g.disk_control.set_enabled(cfg.disk_control_enabled);
     g.mem_control.set_enabled(cfg.mem_control_enabled);
+    g.disk_control
+        .set_idle_under_stress(cfg.idle_under_stress_enabled);
+    g.mem_control
+        .set_idle_under_stress(cfg.idle_under_stress_enabled);
+    g.disk_control
+        .set_idle_streaks(cfg.idle_escalate_streak, cfg.idle_release_streak);
+    g.mem_control
+        .set_idle_streaks(cfg.idle_escalate_streak, cfg.idle_release_streak);
 
     let paused = cfg
         .pause_until
@@ -480,17 +488,20 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
     let paging = paging_pressure_evidence(&inputs);
     let thermal_stress =
         thermal_power_stress(sample.thermal_level, sample.cooling_mode);
-    let disk_stress = pressure.disk_lock == DiskLockMode::Hard
+    let disk_cliff = pressure.disk_lock == DiskLockMode::Hard
         || (sample.disk_latency_sec > 0.0
             && sample.disk_latency_sec >= cfg.disk_latency_hard_sec)
-        || thermal_stress;
-    let mem_stress =
-        paging || pressure.mem_lock == MemLockMode::Hard || thermal_stress;
+        || (envelope.u_disk > envelope.u_set_hi
+            && sample.disk_busy_percent >= cfg.disk_busy_hard_pct);
+    let mem_cliff =
+        pressure.mem_lock == MemLockMode::Hard || (paging && envelope.u_mem > envelope.u_set_hi);
+    let disk_stress = disk_cliff || thermal_stress;
+    let mem_stress = mem_cliff || thermal_stress || paging;
 
     let disk_ctrl = if paused || !cfg.emergency_suspend {
         g.disk_control.set_enabled(false);
         g.disk_control
-            .step(0.0, envelope.u_set_lo, envelope.u_set_hi, false)
+            .step(0.0, envelope.u_set_lo, envelope.u_set_hi, false, false)
     } else {
         g.disk_control.set_enabled(cfg.disk_control_enabled);
         g.disk_control.step(
@@ -498,12 +509,13 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
             envelope.u_set_lo,
             envelope.u_set_hi,
             disk_stress,
+            disk_cliff,
         )
     };
     let mem_ctrl = if paused || !cfg.emergency_suspend {
         g.mem_control.set_enabled(false);
         g.mem_control
-            .step(0.0, envelope.u_set_lo, envelope.u_set_hi, false)
+            .step(0.0, envelope.u_set_lo, envelope.u_set_hi, false, false)
     } else {
         g.mem_control.set_enabled(cfg.mem_control_enabled);
         g.mem_control.step(
@@ -511,6 +523,7 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
             envelope.u_set_lo,
             envelope.u_set_hi,
             mem_stress,
+            mem_cliff,
         )
     };
 

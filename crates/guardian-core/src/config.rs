@@ -58,6 +58,15 @@ pub struct GuardianConfig {
     /// D4: closed-loop memory setpoint (u_mem → soft intensity; WS trim paging-gated). Default ON.
     #[serde(default = "default_true")]
     pub mem_control_enabled: bool,
+    /// v0.6: allow intensity 3 (Idle + EcoQoS) after sustained cliff at intensity 2.
+    #[serde(default = "default_true")]
+    pub idle_under_stress_enabled: bool,
+    /// Ticks at intensity 2 with cliff before Idle escalate.
+    #[serde(default = "default_idle_escalate_streak")]
+    pub idle_escalate_streak: u32,
+    /// Ticks without cliff before leaving Idle back to Soft ceiling.
+    #[serde(default = "default_idle_release_streak")]
+    pub idle_release_streak: u32,
     /// Learn soft/hard thresholds from this machine's disk behavior (default ON).
     #[serde(default = "default_true")]
     pub disk_lock_adaptive: bool,
@@ -119,6 +128,12 @@ fn default_max_suspend_secs() -> u64 {
 fn default_max_soft_demote_secs() -> u64 {
     45
 }
+fn default_idle_escalate_streak() -> u32 {
+    4
+}
+fn default_idle_release_streak() -> u32 {
+    2
+}
 fn default_disk_busy_soft() -> f32 {
     85.0
 }
@@ -167,6 +182,9 @@ impl Default for GuardianConfig {
             disk_lock_enabled: true,
             disk_control_enabled: true,
             mem_control_enabled: true,
+            idle_under_stress_enabled: true,
+            idle_escalate_streak: 4,
+            idle_release_streak: 2,
             disk_lock_adaptive: true,
             disk_busy_soft_pct: 85.0,
             disk_busy_hard_pct: 95.0,
@@ -320,6 +338,9 @@ mod tests {
         assert_eq!(cfg.max_suspend_pids, 6);
         assert_eq!(cfg.max_suspend_secs, 45);
         assert_eq!(cfg.max_soft_demote_secs, 45);
+        assert!(cfg.idle_under_stress_enabled);
+        assert_eq!(cfg.idle_escalate_streak, 4);
+        assert_eq!(cfg.idle_release_streak, 2);
         assert!(cfg.disk_lock_enabled);
         assert!(cfg.disk_lock_adaptive);
         assert_eq!(cfg.disk_busy_soft_pct, 85.0);
@@ -335,6 +356,18 @@ mod tests {
         let cfg: GuardianConfig = serde_json::from_str(raw).unwrap();
         assert_eq!(cfg.critical_guard_mode, CriticalGuardMode::SoftOnly);
         assert_eq!(cfg.suspend_escalation_streak, 3);
+        assert!(cfg.idle_under_stress_enabled);
+        assert_eq!(cfg.idle_escalate_streak, 4);
+        assert_eq!(cfg.idle_release_streak, 2);
+    }
+
+    #[test]
+    fn idle_under_stress_can_disable_via_json() {
+        let raw = r#"{"pause_until":null,"idle_under_stress_enabled":false,"idle_escalate_streak":6,"idle_release_streak":3,"allow_paths":[],"job_cpu_rate_percent":70,"sample_idle_ms":2000,"sample_busy_ms":500,"trusted_pids":[]}"#;
+        let cfg: GuardianConfig = serde_json::from_str(raw).unwrap();
+        assert!(!cfg.idle_under_stress_enabled);
+        assert_eq!(cfg.idle_escalate_streak, 6);
+        assert_eq!(cfg.idle_release_streak, 3);
     }
 
     #[test]

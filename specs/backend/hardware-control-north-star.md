@@ -60,7 +60,7 @@ Owners: `envelope.rs`, `control.rs`, `throttle.rs`, `advisory.rs`, `apps/guardia
 | P1 | Guard UX: sensing vs actively capping | **Done** |
 | P2 | Thermal/power → control stress headroom + L1 | **Done** |
 | Ship | See [docs/roadmap-v0.5.0.md](../../docs/roadmap-v0.5.0.md) S1–S4 | **Done** (unsigned 0.5.0 Latest intent) |
-| P3 | Efficiency Mode Idle under stress streak | **Deferred 0.5.1+** |
+| P3 | Efficiency Mode Idle under stress streak | **Design:** [idle-under-stress-design.md](idle-under-stress-design.md) → v0.6 I1+ |
 | P3 | Stronger soak fixtures; timer-resolution investigate-or-reject | **S1 Done; S2 Reject documented** |
 
 ## Anti-goals

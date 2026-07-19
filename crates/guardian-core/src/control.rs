@@ -4,6 +4,7 @@
 //! Soft actuators only — never NtSuspend. Memory WS trim is paging-gated (L4).
 //! Release is biased: demotions clear quickly when load eases; soft TTL elsewhere.
 //! Stress headroom: hard latency / Disk|Mem Hard / paging / thermal-power → lower band.
+//! v0.6: Idle (intensity 3) only after sustained cliff streak at intensity 2.
 
 use serde::{Deserialize, Serialize};
 
@@ -11,14 +12,18 @@ use crate::advisory::{CoolingMode, ThermalLevel};
 use crate::policy::{PlannedAction, PolicyEngine};
 use crate::types::{SystemSample, ThrottleLevel};
 
-/// Soft intensity ceiling (EcoQoS + I/O / mem-prio). Idle class avoided by default (feels hung).
-const MAX_INTENSITY: u8 = 2;
+/// Soft ceiling without Idle gate (EcoQoS + I/O / mem-prio) — v0.5 default max.
+pub const SOFT_CEILING: u8 = 2;
+/// Efficiency Mode Idle ceiling when Idle-under-stress gate is open (v0.6).
+pub const IDLE_CEILING: u8 = 3;
 /// Minimum ticks between *escalation* steps (anti-chatter).
 const MIN_HOLD_ESCALATE: u32 = 2;
 /// When stressed (latency / Hard lock / paging / thermal), shift band down for more headroom.
 pub const STRESS_BAND_SHIFT: f32 = 0.12;
 /// Clear all intensity when u falls this fraction of u_lo.
 const FULL_RELEASE_RATIO: f32 = 0.70;
+const DEFAULT_IDLE_ESCALATE_STREAK: u32 = 4;
+const DEFAULT_IDLE_RELEASE_STREAK: u32 = 2;
 
 /// Thermal/power constraint → demand more headroom (same band shift as disk/paging stress).
 pub fn thermal_power_stress(thermal: ThermalLevel, cooling: CoolingMode) -> bool {
@@ -72,6 +77,14 @@ pub struct DiskControlLoop {
     hold_ticks: u32,
     mode: DiskControlMode,
     enabled: bool,
+    /// Allow intensity 3 (Idle) after cliff streak at intensity 2.
+    idle_under_stress_enabled: bool,
+    idle_escalate_streak: u32,
+    idle_release_streak: u32,
+    /// Consecutive ticks at intensity ≥2 while cliff is true.
+    at_i2_cliff_ticks: u32,
+    /// Consecutive ticks with cliff false while intensity == 3.
+    no_cliff_ticks: u32,
 }
 
 impl Default for DiskControlLoop {
@@ -81,6 +94,11 @@ impl Default for DiskControlLoop {
             hold_ticks: 0,
             mode: DiskControlMode::Released,
             enabled: true,
+            idle_under_stress_enabled: true,
+            idle_escalate_streak: DEFAULT_IDLE_ESCALATE_STREAK,
+            idle_release_streak: DEFAULT_IDLE_RELEASE_STREAK,
+            at_i2_cliff_ticks: 0,
+            no_cliff_ticks: 0,
         }
     }
 }
@@ -96,24 +114,56 @@ impl DiskControlLoop {
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
         if !enabled {
-            self.intensity = 0;
-            self.hold_ticks = 0;
-            self.mode = DiskControlMode::Released;
+            self.clear_intensity();
         }
+    }
+
+    pub fn set_idle_under_stress(&mut self, enabled: bool) {
+        self.idle_under_stress_enabled = enabled;
+        if !enabled && self.intensity > SOFT_CEILING {
+            self.intensity = SOFT_CEILING;
+            self.at_i2_cliff_ticks = 0;
+            self.no_cliff_ticks = 0;
+        }
+    }
+
+    pub fn set_idle_streaks(&mut self, escalate: u32, release: u32) {
+        self.idle_escalate_streak = escalate.max(1);
+        self.idle_release_streak = release.max(1);
     }
 
     pub fn intensity(&self) -> u8 {
         self.intensity
     }
 
+    fn clear_intensity(&mut self) {
+        self.intensity = 0;
+        self.hold_ticks = 0;
+        self.mode = DiskControlMode::Released;
+        self.at_i2_cliff_ticks = 0;
+        self.no_cliff_ticks = 0;
+    }
+
+    fn ceiling(&self) -> u8 {
+        if self.idle_under_stress_enabled
+            && self.at_i2_cliff_ticks >= self.idle_escalate_streak
+        {
+            IDLE_CEILING
+        } else {
+            SOFT_CEILING
+        }
+    }
+
     /// Step the bang-bang controller.
-    /// `stress`: latency Hard / Disk Hard / paging — demand more headroom (lower band).
+    /// `stress`: band shift (latency Hard / locks / paging / thermal).
+    /// `cliff`: OS-disk / paging cliff for Idle-under-stress gate (not thermal alone).
     pub fn step(
         &mut self,
         u_disk: f32,
         u_set_lo: f32,
         u_set_hi: f32,
         stress: bool,
+        cliff: bool,
     ) -> DiskControlState {
         let mut u_lo = u_set_lo.min(u_set_hi);
         let mut u_hi = u_set_lo.max(u_set_hi);
@@ -123,6 +173,7 @@ impl DiskControlLoop {
         }
 
         if !self.enabled {
+            self.clear_intensity();
             return DiskControlState {
                 intensity: 0,
                 mode: DiskControlMode::Released,
@@ -138,13 +189,32 @@ impl DiskControlLoop {
             self.hold_ticks -= 1;
         }
 
+        // Idle gate bookkeeping.
+        if self.intensity >= SOFT_CEILING && cliff && self.idle_under_stress_enabled {
+            self.at_i2_cliff_ticks = self.at_i2_cliff_ticks.saturating_add(1);
+            self.no_cliff_ticks = 0;
+        } else if self.intensity >= IDLE_CEILING && !cliff {
+            self.no_cliff_ticks = self.no_cliff_ticks.saturating_add(1);
+            if self.no_cliff_ticks >= self.idle_release_streak {
+                self.intensity = SOFT_CEILING;
+                self.at_i2_cliff_ticks = 0;
+                self.no_cliff_ticks = 0;
+            }
+        } else if !cliff {
+            self.at_i2_cliff_ticks = 0;
+            self.no_cliff_ticks = 0;
+        }
+
+        let max_i = self.ceiling();
+
         if u_disk < u_lo * FULL_RELEASE_RATIO {
-            self.intensity = 0;
-            self.hold_ticks = 0;
-            self.mode = DiskControlMode::Released;
+            self.clear_intensity();
         } else if u_disk < u_lo {
             if self.intensity > 0 {
                 self.intensity -= 1;
+            }
+            if self.intensity < SOFT_CEILING {
+                self.at_i2_cliff_ticks = 0;
             }
             self.mode = if self.intensity == 0 {
                 DiskControlMode::Released
@@ -152,7 +222,7 @@ impl DiskControlLoop {
                 DiskControlMode::Holding
             };
         } else if u_disk > u_hi {
-            if !holding_escalate && self.intensity < MAX_INTENSITY {
+            if !holding_escalate && self.intensity < max_i {
                 self.intensity += 1;
                 self.hold_ticks = MIN_HOLD_ESCALATE;
             }
@@ -165,12 +235,17 @@ impl DiskControlLoop {
             };
         }
 
+        // If Idle disabled mid-flight, clamp.
+        if !self.idle_under_stress_enabled && self.intensity > SOFT_CEILING {
+            self.intensity = SOFT_CEILING;
+        }
+
         self.state(u_disk, u_lo, u_hi)
     }
 
-    /// Backward-compatible step without stress flag.
+    /// Backward-compatible step without cliff (Idle gate never opens).
     pub fn step_simple(&mut self, u_disk: f32, u_set_lo: f32, u_set_hi: f32) -> DiskControlState {
-        self.step(u_disk, u_set_lo, u_set_hi, false)
+        self.step(u_disk, u_set_lo, u_set_hi, false, false)
     }
 
     fn state(&self, u_disk: f32, u_lo: f32, u_hi: f32) -> DiskControlState {
@@ -218,6 +293,7 @@ pub fn plan_disk_control_actions(
             "disk_control:ecoqos",
         ),
         2 => (ThrottleLevel::BelowNormal, true, "disk_control:io_verylow"),
+        3 => (ThrottleLevel::Idle, true, "disk_control:efficiency_idle"),
         _ => (ThrottleLevel::Idle, true, "disk_control:idle"),
     };
 
@@ -302,6 +378,7 @@ pub fn plan_mem_control_actions(
                 "mem_control:memprio_only"
             },
         ),
+        3 => (ThrottleLevel::Idle, "mem_control:efficiency_idle"),
         _ => (
             ThrottleLevel::Idle,
             if apply_ws {
@@ -363,28 +440,32 @@ mod tests {
     #[test]
     fn escalates_above_setpoint_hi() {
         let mut loop_ = DiskControlLoop::new(true);
-        let s = loop_.step(1.05, U_SET_LO, U_SET_HI, false);
+        let s = loop_.step(1.05, U_SET_LO, U_SET_HI, false, false);
         assert_eq!(s.intensity, 1);
         assert_eq!(s.mode, DiskControlMode::Capping);
         // escalation hold ticks
-        let s = loop_.step(1.05, U_SET_LO, U_SET_HI, false);
+        let s = loop_.step(1.05, U_SET_LO, U_SET_HI, false, false);
         assert_eq!(s.intensity, 1);
-        let s = loop_.step(1.05, U_SET_LO, U_SET_HI, false);
+        let s = loop_.step(1.05, U_SET_LO, U_SET_HI, false, false);
         assert_eq!(s.intensity, 1);
-        let s = loop_.step(1.05, U_SET_LO, U_SET_HI, false);
+        let s = loop_.step(1.05, U_SET_LO, U_SET_HI, false, false);
         assert_eq!(s.intensity, 2);
-        assert!(s.intensity <= MAX_INTENSITY);
+        assert!(s.intensity <= SOFT_CEILING);
+        // Without cliff, Soft ceiling holds — no Idle.
+        for _ in 0..20 {
+            let s = loop_.step(1.05, U_SET_LO, U_SET_HI, false, false);
+            assert_eq!(s.intensity, SOFT_CEILING);
+        }
     }
 
     #[test]
     fn full_release_when_well_below_lo() {
         let mut loop_ = DiskControlLoop::new(true);
         for _ in 0..12 {
-            let _ = loop_.step(1.2, U_SET_LO, U_SET_HI, false);
+            let _ = loop_.step(1.2, U_SET_LO, U_SET_HI, false, false);
         }
-        assert_eq!(loop_.intensity(), MAX_INTENSITY);
-        // u < 0.70 × u_lo → clear in one tick (no release hold)
-        let s = loop_.step(0.50, U_SET_LO, U_SET_HI, false);
+        assert_eq!(loop_.intensity(), SOFT_CEILING);
+        let s = loop_.step(0.50, U_SET_LO, U_SET_HI, false, false);
         assert_eq!(s.intensity, 0);
         assert_eq!(s.mode, DiskControlMode::Released);
     }
@@ -393,24 +474,23 @@ mod tests {
     fn releases_stepwise_just_below_lo() {
         let mut loop_ = DiskControlLoop::new(true);
         for _ in 0..12 {
-            let _ = loop_.step(1.2, U_SET_LO, U_SET_HI, false);
+            let _ = loop_.step(1.2, U_SET_LO, U_SET_HI, false, false);
         }
-        assert_eq!(loop_.intensity(), MAX_INTENSITY);
-        // Just under lo but above full-release ratio — step down without hold.
+        assert_eq!(loop_.intensity(), SOFT_CEILING);
         let just_under = U_SET_LO * 0.85;
         assert!(just_under >= U_SET_LO * FULL_RELEASE_RATIO);
-        let s = loop_.step(just_under, U_SET_LO, U_SET_HI, false);
-        assert_eq!(s.intensity, MAX_INTENSITY - 1);
-        let s = loop_.step(just_under, U_SET_LO, U_SET_HI, false);
-        assert_eq!(s.intensity, MAX_INTENSITY - 2);
+        let s = loop_.step(just_under, U_SET_LO, U_SET_HI, false, false);
+        assert_eq!(s.intensity, SOFT_CEILING - 1);
+        let s = loop_.step(just_under, U_SET_LO, U_SET_HI, false, false);
+        assert_eq!(s.intensity, SOFT_CEILING - 2);
     }
 
     #[test]
     fn holds_inside_band() {
         let mut loop_ = DiskControlLoop::new(true);
-        let _ = loop_.step(1.1, U_SET_LO, U_SET_HI, false);
+        let _ = loop_.step(1.1, U_SET_LO, U_SET_HI, false, false);
         let mid = (U_SET_LO + U_SET_HI) * 0.5;
-        let s = loop_.step(mid, U_SET_LO, U_SET_HI, false);
+        let s = loop_.step(mid, U_SET_LO, U_SET_HI, false, false);
         assert_eq!(s.intensity, 1);
         assert_eq!(s.mode, DiskControlMode::Holding);
     }
@@ -418,8 +498,7 @@ mod tests {
     #[test]
     fn stress_shifts_band_down() {
         let mut loop_ = DiskControlLoop::new(true);
-        // Under stress, band is ~0.68–0.76 so 0.82 is above stressed hi → capping.
-        let s = loop_.step(0.82, U_SET_LO, U_SET_HI, true);
+        let s = loop_.step(0.82, U_SET_LO, U_SET_HI, true, false);
         assert_eq!(s.intensity, 1);
         assert_eq!(s.mode, DiskControlMode::Capping);
         assert!(s.u_set_hi < U_SET_HI);
@@ -452,9 +531,8 @@ mod tests {
         let mut calm = DiskControlLoop::new(true);
         let mut hot = DiskControlLoop::new(true);
         let mid = (U_SET_LO + U_SET_HI) * 0.5;
-        let calm_s = calm.step(mid, U_SET_LO, U_SET_HI, false);
-        let hot_s = hot.step(mid, U_SET_LO, U_SET_HI, true);
-        // Mid-band under calm stays released/holding at 0; under thermal stress mid is above lowered hi.
+        let calm_s = calm.step(mid, U_SET_LO, U_SET_HI, false, false);
+        let hot_s = hot.step(mid, U_SET_LO, U_SET_HI, true, false);
         assert_eq!(calm_s.intensity, 0);
         assert_eq!(hot_s.intensity, 1);
         assert_eq!(hot_s.mode, DiskControlMode::Capping);
@@ -463,7 +541,7 @@ mod tests {
     #[test]
     fn disabled_stays_released() {
         let mut loop_ = DiskControlLoop::new(false);
-        let s = loop_.step(2.0, U_SET_LO, U_SET_HI, false);
+        let s = loop_.step(2.0, U_SET_LO, U_SET_HI, false, true);
         assert_eq!(s.intensity, 0);
         assert_eq!(s.mode, DiskControlMode::Released);
     }
@@ -473,6 +551,123 @@ mod tests {
         assert!((U_SET_LO - 0.80).abs() < f32::EPSILON);
         assert!((U_SET_HI - 0.88).abs() < f32::EPSILON);
         assert!(U_SET_HI < 0.95);
+    }
+
+    #[test]
+    fn idle_gate_requires_cliff_streak_at_i2() {
+        let mut loop_ = DiskControlLoop::new(true);
+        loop_.set_idle_streaks(4, 2);
+        // Reach Soft ceiling without cliff.
+        for _ in 0..12 {
+            let _ = loop_.step(1.2, U_SET_LO, U_SET_HI, true, false);
+        }
+        assert_eq!(loop_.intensity(), SOFT_CEILING);
+        // Three cliff ticks — still Soft ceiling (streak 4).
+        for _ in 0..3 {
+            let s = loop_.step(1.2, U_SET_LO, U_SET_HI, true, true);
+            assert_eq!(s.intensity, SOFT_CEILING);
+        }
+        // Fourth cliff tick opens gate; then escalate through hold to Idle.
+        let mut saw_idle = false;
+        for _ in 0..8 {
+            let s = loop_.step(1.2, U_SET_LO, U_SET_HI, true, true);
+            if s.intensity == IDLE_CEILING {
+                saw_idle = true;
+                break;
+            }
+        }
+        assert!(saw_idle, "expected intensity 3 after cliff streak");
+    }
+
+    #[test]
+    fn idle_disabled_never_exceeds_soft_ceiling() {
+        let mut loop_ = DiskControlLoop::new(true);
+        loop_.set_idle_under_stress(false);
+        loop_.set_idle_streaks(2, 2);
+        for _ in 0..30 {
+            let s = loop_.step(1.2, U_SET_LO, U_SET_HI, true, true);
+            assert!(s.intensity <= SOFT_CEILING);
+        }
+    }
+
+    #[test]
+    fn idle_releases_when_cliff_clears() {
+        let mut loop_ = DiskControlLoop::new(true);
+        loop_.set_idle_streaks(2, 2);
+        for _ in 0..20 {
+            let _ = loop_.step(1.2, U_SET_LO, U_SET_HI, true, true);
+            if loop_.intensity() == IDLE_CEILING {
+                break;
+            }
+        }
+        assert_eq!(loop_.intensity(), IDLE_CEILING);
+        // Stay above hi but cliff false → after release streak, drop to Soft ceiling.
+        let s = loop_.step(1.2, U_SET_LO, U_SET_HI, true, false);
+        assert_eq!(s.intensity, IDLE_CEILING);
+        let s = loop_.step(1.2, U_SET_LO, U_SET_HI, true, false);
+        assert_eq!(s.intensity, SOFT_CEILING);
+    }
+
+    #[test]
+    fn plan_efficiency_idle_is_idle_not_suspend() {
+        use crate::types::ProcessSample;
+        use chrono::Utc;
+        let cfg = GuardianConfig::default();
+        let engine = PolicyEngine::new(&cfg, 1);
+        let sample = SystemSample {
+            timestamp: Utc::now(),
+            cpu_percent: 50.0,
+            memory_total_bytes: 8 << 30,
+            memory_available_bytes: 4 << 30,
+            memory_commit_percent: 40.0,
+            disk_busy_percent: 95.0,
+            disk_queue_length: 8.0,
+            disk_io_bytes_per_sec: 50_000_000,
+            hard_faults_per_sec: 0.0,
+            focus_pid: Some(10),
+            disk_latency_sec: 0.05,
+            pagefile_writes_per_sec: 0.0,
+            paging_file_pct: 0.0,
+            dpc_time_percent: 0.0,
+            interrupt_time_percent: 0.0,
+            on_battery: false,
+            battery_percent: None,
+            cooling_mode: Default::default(),
+            cpu_mhz_ratio: 1.0,
+            thermal_level: Default::default(),
+            processes: vec![
+                ProcessSample {
+                    pid: 10,
+                    parent_pid: 0,
+                    name: "game.exe".into(),
+                    path: None,
+                    cpu_percent: 40.0,
+                    memory_bytes: 0,
+                    disk_read_bytes_per_sec: 0,
+                    disk_write_bytes_per_sec: 0,
+                    cmd_line: None,
+                },
+                ProcessSample {
+                    pid: 20,
+                    parent_pid: 0,
+                    name: "hog.exe".into(),
+                    path: None,
+                    cpu_percent: 10.0,
+                    memory_bytes: 0,
+                    disk_read_bytes_per_sec: 0,
+                    disk_write_bytes_per_sec: 80_000_000,
+                    cmd_line: None,
+                },
+            ],
+        };
+        let actions = plan_disk_control_actions(&engine, &sample, 3);
+        assert!(actions.iter().any(|a| a.pid == 20));
+        assert!(actions
+            .iter()
+            .all(|a| a.level == ThrottleLevel::Idle && a.level != ThrottleLevel::Suspend));
+        assert!(actions
+            .iter()
+            .any(|a| a.reason == "disk_control:efficiency_idle" && a.apply_disk_lock));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-# Unstick — User Guide (v0.4 hardware-control)
+# Unstick — User Guide (v0.6 hardware-control)
 
 ## Scope
 
@@ -9,8 +9,8 @@ Unstick is a **Windows** portable **hardware-control** utility for the **OS driv
 Under disk / memory pressure it:
 
 - **Disk Lock** — soft-throttles background I/O when OS-drive Active Time crosses your thresholds (protects SSD/HDD responsiveness)
-- **Disk control** — closed-loop soft capping when disk load approaches the calibrated envelope (~97–99% of the freeze cliff); EcoQoS → VeryLow I/O → Idle; never Suspend
-- **Mem control** — same closed-loop on RAM pressure; memory-priority first; working-set trim only when paging evidence is present (avoids IDE false positives)
+- **Disk control** — closed-loop soft capping toward the freeze-safe band (~80–88% of the calibrated cliff); EcoQoS → VeryLow I/O → **Efficiency Idle** (i3) only after a sustained cliff at i2; never Suspend
+- **Mem control** — same closed-loop on RAM pressure; memory-priority first; working-set trim only when paging evidence is present (avoids IDE false positives); same Idle gate under sustained cliff
 - **Mem Lock** — lowers **memory priority** (and Soft working-set trim) so cold pages yield first; Hard only with paging evidence
 - Soft-throttles competing background work with **EcoQoS / Efficiency Mode** as a means to keep the machine from hitching when disk/RAM are contended — not a general CPU “optimizer”
 - **Hardware Guard** — Soft only by default; Suspend is experimental opt-in only
@@ -77,7 +77,15 @@ On the **Guard** tab → **Controls**:
 - Under hard latency / Disk Hard / paging stress, the band shifts lower for more headroom.
 - Soft demotions auto-restore after ~45s even if pressure remains (brief recovery window), and release immediately when utilization eases.
 - **Thermal / power stress** (Fair/Serious thermal or Passive cooling) shifts the control band lower for more headroom — load **relief**, not hardware-damage prevention.
-- Chips on the hero: **Disk cap** / **RAM cap** when actively controlling; tripwire lines show **monitoring** vs **soft capping**.
+- Chips on the hero: **Disk cap** / **RAM cap** at intensity 1–2; **Disk idle** / **RAM idle** at intensity **3**; tripwire lines show **monitoring**, **soft capping**, or **efficiency idle**.
+
+### Efficiency Idle (intensity 3)
+
+When closed-loop has already been at **i2** for several ticks and the OS disk/RAM is still at a hard cliff (Hard latency / Disk Hard / paging), Unstick may deepen Soft control to **Efficiency Idle** — Windows Idle priority + EcoQoS (Task Manager Efficiency Mode parity). This is still Soft-only; it is **not** Suspend.
+
+- Auto-restores via the Soft demotion TTL (~45s) even if pressure remains.
+- Focused app, whitelist, and shells are never Idle’d.
+- On slow OS volumes (e.g. WD Green–class HDD), **launch stutter or screenshot hitch can still happen** under ~1 s disk queue — Idle-under-stress deepens relief; it does not guarantee zero stutter.
 
 Leave **Hardware Guard** checked (ARMED). Soft only is the product path.
 
@@ -118,7 +126,7 @@ Unstick is a **user-mode** Guard for **freeze mitigation** and **load/thermal re
 
 Soft remediation uses **EcoQoS** and **memory priority** (Microsoft Efficiency Mode style). **NtSuspend is not part of the product path** unless you explicitly opt in (see Hardware Guard).
 
-On Guard, **tripwires / EMERGENCY** mean Unstick is **sensing** pressure. **Disk cap / RAM cap** mean it is **actively soft-capping** offenders. Sensing without capping is normal when utilization is below the freeze-safe band or the spike is too brief.
+On Guard, **tripwires / EMERGENCY** mean Unstick is **sensing** pressure. **Disk cap / RAM cap** mean it is **actively soft-capping** offenders; **Disk idle / RAM idle** (or tripwire **efficiency idle**) means intensity 3 Efficiency Mode is in effect. Sensing without capping is normal when utilization is below the freeze-safe band or the spike is too brief.
 
 ## Whitelist
 

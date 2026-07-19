@@ -522,6 +522,7 @@ impl UnstickApp {
                 ui.horizontal_centered(|ui| {
                     let disk_i = status.map(|s| s.disk_control_intensity).unwrap_or(0);
                     let mem_i = status.map(|s| s.mem_control_intensity).unwrap_or(0);
+                    let efficiency_idle = disk_i >= 3 || mem_i >= 3;
                     let (label, color) = if controlling {
                         let mut parts = Vec::new();
                         if disk_ctrl_mode != DiskControlMode::Released {
@@ -530,10 +531,15 @@ impl UnstickApp {
                         if mem_ctrl_mode != DiskControlMode::Released {
                             parts.push(format!("ram i{mem_i}"));
                         }
-                        let detail = if parts.is_empty() {
-                            "soft capping".into()
+                        let verb = if efficiency_idle {
+                            "efficiency idle"
                         } else {
-                            format!("soft capping · {}", parts.join(" · "))
+                            "soft capping"
+                        };
+                        let detail = if parts.is_empty() {
+                            verb.into()
+                        } else {
+                            format!("{verb} · {}", parts.join(" · "))
                         };
                         (format!("{tw} — {detail}"), CORAL)
                     } else {
@@ -542,9 +548,12 @@ impl UnstickApp {
                             theme::AMBER,
                         )
                     };
-                    widgets::status_chip(ui, label, color).on_hover_text(
-                        "Tripwire = sensing pressure. Soft capping = actively demoting background offenders. Monitoring without capping is normal for brief spikes.",
-                    );
+                    let hover = if efficiency_idle {
+                        "Efficiency Mode (Idle+EcoQoS) under sustained disk/RAM cliff — auto-restores."
+                    } else {
+                        "Tripwire = sensing pressure. Soft capping = actively demoting background offenders. Monitoring without capping is normal for brief spikes."
+                    };
+                    widgets::status_chip(ui, label, color).on_hover_text(hover);
                 });
             } else if controlling {
                 ui.add_space(8.0);
@@ -634,34 +643,58 @@ impl UnstickApp {
                         widgets::status_chip(ui, format!("{suspended_n} suspended"), CORAL);
                     }
                     if disk_ctrl_mode != DiskControlMode::Released {
+                        let i = status.map(|s| s.disk_control_intensity).unwrap_or(0);
                         let (label, color) = match disk_ctrl_mode {
                             DiskControlMode::Capping => {
                                 let u = status.map(|s| s.envelope.u_disk).unwrap_or(0.0);
-                                let i = status.map(|s| s.disk_control_intensity).unwrap_or(0);
-                                (format!("Disk cap · i{i} · u {u:.2}"), CORAL)
+                                if i >= 3 {
+                                    (format!("Disk idle · i{i} · u {u:.2}"), CORAL)
+                                } else {
+                                    (format!("Disk cap · i{i} · u {u:.2}"), CORAL)
+                                }
                             }
                             DiskControlMode::Holding => {
-                                let i = status.map(|s| s.disk_control_intensity).unwrap_or(0);
-                                (format!("Disk hold · i{i}"), theme::AMBER)
+                                if i >= 3 {
+                                    (format!("Disk idle · hold i{i}"), theme::AMBER)
+                                } else {
+                                    (format!("Disk hold · i{i}"), theme::AMBER)
+                                }
                             }
                             DiskControlMode::Released => (String::new(), TEXT_DIM),
                         };
-                        widgets::status_chip(ui, label, color);
+                        let resp = widgets::status_chip(ui, label, color);
+                        if i >= 3 {
+                            resp.on_hover_text(
+                                "Efficiency Mode (Idle+EcoQoS) under sustained disk cliff — auto-restores.",
+                            );
+                        }
                     }
                     if mem_ctrl_mode != DiskControlMode::Released {
+                        let i = status.map(|s| s.mem_control_intensity).unwrap_or(0);
                         let (label, color) = match mem_ctrl_mode {
                             DiskControlMode::Capping => {
                                 let u = status.map(|s| s.envelope.u_mem).unwrap_or(0.0);
-                                let i = status.map(|s| s.mem_control_intensity).unwrap_or(0);
-                                (format!("RAM cap · i{i} · u {u:.2}"), CORAL)
+                                if i >= 3 {
+                                    (format!("RAM idle · i{i} · u {u:.2}"), CORAL)
+                                } else {
+                                    (format!("RAM cap · i{i} · u {u:.2}"), CORAL)
+                                }
                             }
                             DiskControlMode::Holding => {
-                                let i = status.map(|s| s.mem_control_intensity).unwrap_or(0);
-                                (format!("RAM hold · i{i}"), theme::AMBER)
+                                if i >= 3 {
+                                    (format!("RAM idle · hold i{i}"), theme::AMBER)
+                                } else {
+                                    (format!("RAM hold · i{i}"), theme::AMBER)
+                                }
                             }
                             DiskControlMode::Released => (String::new(), TEXT_DIM),
                         };
-                        widgets::status_chip(ui, label, color);
+                        let resp = widgets::status_chip(ui, label, color);
+                        if i >= 3 {
+                            resp.on_hover_text(
+                                "Efficiency Mode (Idle+EcoQoS) under sustained RAM cliff — auto-restores.",
+                            );
+                        }
                     }
                     if disk_lock != DiskLockMode::Off {
                         let dl_color = match disk_lock {
@@ -854,7 +887,7 @@ impl UnstickApp {
                             .color(TEXT),
                     );
                     ui.label(theme::dim(
-                        "Holds OS disk and RAM just under the freeze cliff (~97–99%). Soft actuators only — never pauses apps by default.",
+                        "Holds OS disk and RAM near 80–88% of the freeze cliff. Soft actuators only (i3 = Efficiency Idle under sustained cliff) — never pauses apps by default.",
                     ));
                     ui.add_space(8.0);
                     if let Some(s) = status {

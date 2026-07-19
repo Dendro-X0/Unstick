@@ -24,7 +24,7 @@ pub use config::{
 pub use control::{
     merge_control_actions, merge_disk_control, plan_disk_control_actions, plan_mem_control_actions,
     thermal_power_stress, DiskControlLoop, DiskControlMode, DiskControlState, MemControlLoop,
-    MemControlMode, MemControlState, STRESS_BAND_SHIFT,
+    MemControlMode, MemControlState, IDLE_CEILING, SOFT_CEILING, STRESS_BAND_SHIFT,
 };
 pub use disk_calibrate::{saturation_index, DiskCalibrator};
 pub use envelope::{

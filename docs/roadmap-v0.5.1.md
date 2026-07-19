@@ -20,7 +20,7 @@ Make **v0.5.0** safer to recommend: prove soft capping helps under sustained OS-
 | ID | Work | Done when |
 |----|------|-----------|
 | **T1** | Band roadmap + future ladder linked | **Done** |
-| **T2** | L3 cliff soak evidence template + at least one filled run | Template **Done** — human run pending |
+| **T2** | L3 cliff soak evidence template + at least one filled run | **Done** — Run 1 WD Green (soft capping i2; launch stutter under ~948 ms latency) |
 | **T3** | Repo description/topics set on GitHub | **Done** |
 | **T4** | Self-overhead remeasure on 0.5.0 binaries | **Done** — idle ~1.5% one-core (see CSV) |
 | **T5** | Authenticode: sign zip **or** document blocker | **Blocker doc** — [signing-blocker.md](signing-blocker.md) |

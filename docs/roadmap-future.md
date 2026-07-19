@@ -1,12 +1,12 @@
 # Unstick — future roadmap (after v0.5.0)
 
-**Current Latest:** [v0.5.0](RELEASE-v0.5.0.md) (unsigned portable)  
+**Current Latest:** [v0.6.0](RELEASE-v0.6.0.md) (unsigned portable)  
 **North-star:** [hardware-control-north-star.md](../specs/backend/hardware-control-north-star.md)  
 **Living index:** [roadmap-next-release.md](roadmap-next-release.md)
 
 ```
-HANDOFF ATOMIC STEP: none — forward roadmap after 0.5.0 ship
-PAUSED / CANCELLED:    Suspend-as-primary; overclocking; standby purge; DPC “fixes”; other-OS; damage claims
+HANDOFF ATOMIC STEP: none — forward after 0.6.0; next v0.7 UX/ops or Authenticode
+PAUSED / CANCELLED:    Suspend-as-primary; overclocking; standby purge; DPC “fixes”; other-OS; damage claims; zero-stutter claims
 CANONICAL OWNER:       docs + product direction
 PROOF BEFORE DONE:     Each version names L1–L3 proof before “shipped”
 ```
@@ -53,14 +53,16 @@ flowchart LR
 
 ## v0.6.0 — Control depth (mission actuators)
 
+**Detail:** [roadmap-v0.6.0.md](roadmap-v0.6.0.md) · **Design:** [idle-under-stress-design.md](../specs/backend/idle-under-stress-design.md)
+
 **Goal:** Stronger soft demotion **only where north-star allows deepen**.
 
-| Candidate | Gate |
-|-----------|------|
-| Task Manager–parity Efficiency Mode (EcoQoS + Idle) under **sustained** stress streak + soft TTL | Design spec + hang FP soak first |
-| PI-ish / smoother intensity (less bang-bang chatter) | Must not reintroduce cliff parking |
-| Richer offender ranking (disk bytes + latency contribution) | Focus/whitelist still sacred |
-| Dual-axis soak recipe (disk_hog cliff + mem_hog) in docs/scripts | Proof harness |
+| Candidate | Gate | Status |
+|-----------|------|--------|
+| Task Manager–parity Efficiency Mode (EcoQoS + Idle) under **sustained** stress streak + soft TTL | Design + hang FP soak | **Shipped in 0.6.0** — L3 Run 2 i3 + restore |
+| PI-ish / smoother intensity | Must not reintroduce cliff parking | Later |
+| Richer offender ranking | Focus/whitelist sacred | Later |
+| Dual-axis soak recipe | Proof harness | Optional with I4 |
 
 **Still reject:** timer-resolution IGNORE, standby purge, RAM “cleaners”, GPU clocks.
 
@@ -116,4 +118,4 @@ Prefer the **smallest** item that raises either:
 - **Control quality** (better soft demotion under real freeze cliffs), or  
 - **Operator clarity** (sensing vs capping already done — next is action history / profiles)
 
-Default next after 0.5.0: **start v0.5.1** with soak evidence + signing path; only then open Idle-under-stress design.
+Default next after 0.6.0: **v0.7 UX/ops** (action history, profiles, tray badges) and Authenticode when a cert exists; do not claim zero launch stutter.
