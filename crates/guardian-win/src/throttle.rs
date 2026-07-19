@@ -116,6 +116,7 @@ struct AppliedState {
     level: ThrottleLevel,
     ecoqos: bool,
     mem_prio: bool,
+    since: Instant,
 }
 
 pub struct ThrottleExecutor {
@@ -123,6 +124,8 @@ pub struct ThrottleExecutor {
     jobs: HashMap<u32, usize>,
     job_cpu_rate_percent: u32,
     applied: HashMap<u32, AppliedState>,
+    /// Soft demotion max age before forced restore (even if still in plan).
+    max_soft_demote_secs: u64,
     /// Currently AboveNormal-boosted foreground PID.
     boosted_pid: Option<u32>,
     pub ledger: SuspendLedger,
@@ -150,6 +153,7 @@ impl ThrottleExecutor {
             jobs: HashMap::new(),
             job_cpu_rate_percent: job_cpu_rate_percent.clamp(10, 100),
             applied: HashMap::new(),
+            max_soft_demote_secs: 45,
             boosted_pid: None,
             ledger: SuspendLedger::new(max_suspend_secs),
             suspend_cooldown_until: HashMap::new(),
@@ -157,6 +161,14 @@ impl ThrottleExecutor {
             #[cfg(windows)]
             nt_suspend: load_nt_fns(),
         }
+    }
+
+    pub fn set_max_soft_demote_secs(&mut self, secs: u64) {
+        self.max_soft_demote_secs = secs.max(5);
+    }
+
+    pub fn max_soft_demote_secs(&self) -> u64 {
+        self.max_soft_demote_secs
     }
 
     fn arm_suspend_cooldown(&mut self, pid: u32) {
@@ -282,12 +294,18 @@ impl ThrottleExecutor {
             }
             match self.apply_one(action) {
                 Ok(()) => {
+                    let since = self
+                        .applied
+                        .get(&action.pid)
+                        .map(|s| s.since)
+                        .unwrap_or_else(Instant::now);
                     self.applied.insert(
                         action.pid,
                         AppliedState {
                             level: action.level,
                             ecoqos: action.apply_ecoqos,
                             mem_prio: action.apply_mem_priority_low,
+                            since,
                         },
                     );
                     if action.level == ThrottleLevel::Suspend {
@@ -364,6 +382,69 @@ impl ThrottleExecutor {
                 Ok(()) => debug!(pid, "restored soft demotion (left plan)"),
                 Err(e) => warn!(pid, error = %e, "soft restore failed — will retry"),
             }
+        }
+    }
+
+    /// Force-restore soft demotions that exceeded TTL even if still in the plan.
+    /// Creates recovery windows so demotions cannot linger indefinitely.
+    pub fn expire_soft_demotions(&mut self) -> Vec<(u32, String)> {
+        let max = self.max_soft_demote_secs;
+        let expired: Vec<u32> = self
+            .applied
+            .iter()
+            .filter(|(pid, state)| {
+                !self.ledger.contains(**pid) && state.since.elapsed().as_secs() >= max
+            })
+            .map(|(pid, _)| *pid)
+            .collect();
+        let mut out = Vec::new();
+        for pid in expired {
+            match self.restore_pid(pid) {
+                Ok(()) => {
+                    debug!(pid, max_secs = max, "soft demotion TTL expired — restored");
+                    out.push((pid, "soft_demote_ttl".to_string()));
+                }
+                Err(e) => {
+                    // Drop tracking even if OpenProcess fails (exited PID) so demotion
+                    // state cannot linger indefinitely in the executor.
+                    self.applied.remove(&pid);
+                    warn!(pid, error = %e, "soft TTL restore failed — cleared tracking");
+                    out.push((pid, "soft_demote_ttl".to_string()));
+                }
+            }
+        }
+        out
+    }
+
+    /// Test helper: how many soft demotions are tracked.
+    pub fn soft_applied_count(&self) -> usize {
+        self.applied
+            .keys()
+            .filter(|p| !self.ledger.contains(**p))
+            .count()
+    }
+
+    /// Test helper: seed a soft demotion without calling Windows APIs.
+    #[cfg(test)]
+    pub fn seed_soft_demotion_for_test(&mut self, pid: u32) {
+        self.applied.insert(
+            pid,
+            AppliedState {
+                level: ThrottleLevel::BelowNormal,
+                ecoqos: true,
+                mem_prio: true,
+                since: Instant::now(),
+            },
+        );
+    }
+
+    /// Test helper: mark a soft demotion as aged past TTL.
+    #[cfg(test)]
+    pub fn force_soft_demote_age_for_test(&mut self, pid: u32, secs_ago: u64) {
+        if let Some(state) = self.applied.get_mut(&pid) {
+            state.since = Instant::now()
+                .checked_sub(std::time::Duration::from_secs(secs_ago))
+                .unwrap_or_else(Instant::now);
         }
     }
 
@@ -708,5 +789,23 @@ impl Drop for ThrottleExecutor {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod soft_ttl_tests {
+    use super::*;
+
+    #[test]
+    fn soft_demotion_ttl_forces_restore() {
+        let mut ex = ThrottleExecutor::new(70, 45);
+        ex.set_max_soft_demote_secs(45);
+        ex.seed_soft_demotion_for_test(4242);
+        assert_eq!(ex.soft_applied_count(), 1);
+        ex.force_soft_demote_age_for_test(4242, 60);
+        let expired = ex.expire_soft_demotions();
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].0, 4242);
+        assert_eq!(ex.soft_applied_count(), 0);
     }
 }

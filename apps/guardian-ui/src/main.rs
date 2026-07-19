@@ -1,5 +1,7 @@
 //! Unstick — polished desktop client.
 
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod app;
 mod chrome;
 mod client;

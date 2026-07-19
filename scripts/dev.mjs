@@ -57,8 +57,10 @@ async function start(bin, label) {
     const wd = root.replace(/'/g, "''");
     const pidFile = path.join(tmp, `${label}.pid`);
     const pidEsc = pidFile.replace(/'/g, "''");
+    // Service runs headless; UI needs a normal window.
+    const style = label === "guardian-service" ? "Hidden" : "Normal";
     const ps = [
-      `$p = Start-Process -FilePath '${escaped}' -WorkingDirectory '${wd}' -PassThru`,
+      `$p = Start-Process -FilePath '${escaped}' -WorkingDirectory '${wd}' -WindowStyle ${style} -PassThru`,
       `Set-Content -Path '${pidEsc}' -Value $p.Id -Encoding ascii`,
     ].join("; ");
 
@@ -117,6 +119,21 @@ function shutdown() {
 }
 
 async function main() {
+  // Windows: prior UI/service keep .exe locked → cargo "Access is denied".
+  if (isWin) {
+    console.log("→ stopping any prior Unstick processes");
+    await new Promise((resolve) => {
+      const child = spawn(
+        "taskkill",
+        ["/F", "/IM", "guardian-ui.exe", "/IM", "guardian-service.exe", "/IM", "guardian-tray.exe"],
+        { stdio: "ignore", windowsHide: true },
+      );
+      child.on("exit", () => resolve());
+      child.on("error", () => resolve());
+    });
+    await sleep(400);
+  }
+
   console.log("→ cargo build -p guardian-service -p guardian-ui");
   try {
     await run("cargo", ["build", "-p", "guardian-service", "-p", "guardian-ui"]);

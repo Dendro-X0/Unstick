@@ -1,4 +1,8 @@
 //! System tray / status client for Unstick.
+//!
+//! Windows GUI subsystem — tray mode has no console. `--cli` / `status` attach one.
+
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod client;
 
@@ -8,25 +12,45 @@ use anyhow::Result;
 use guardian_core::{status_path, ClientRequest, PressureBand, ServerPush, StatusSnapshot};
 use tracing_subscriber::EnvFilter;
 
+#[cfg(windows)]
+fn attach_cli_console() {
+    use windows::Win32::System::Console::{AllocConsole, AttachConsole, ATTACH_PARENT_PROCESS};
+    unsafe {
+        if AttachConsole(ATTACH_PARENT_PROCESS).is_err() {
+            let _ = AllocConsole();
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse()?))
-        .with_target(false)
-        .init();
-
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|a| a == "--cli" || a == "status") {
+    let cli = args.iter().any(|a| a == "--cli" || a == "status");
+
+    if cli {
+        #[cfg(windows)]
+        attach_cli_console();
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse()?))
+            .with_target(false)
+            .init();
         return run_cli().await;
     }
 
     #[cfg(windows)]
     {
         if args.iter().any(|a| a == "--tray") || args.is_empty() {
+            // Tray: file-less quiet; avoid creating a console for tracing.
             return run_tray().await;
         }
     }
 
+    #[cfg(windows)]
+    attach_cli_console();
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse()?))
+        .with_target(false)
+        .init();
     run_cli().await
 }
 

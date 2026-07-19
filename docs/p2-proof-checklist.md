@@ -39,7 +39,13 @@ Automated probe (low soft busy% + `disk-hog`):
 powershell -File scripts/Verify-DiskLock-L3.ps1
 ```
 
-Evidence: `specs/backend/disk-lock-l3-evidence.md`.
+Manual cliff soak (sustained; fixture only):
+
+```bash
+cargo run --release --manifest-path fixtures/disk_hog/Cargo.toml -- cliff
+```
+
+Defaults without args: **1024 MiB × 180s**. See [critical-guard-soak.md](critical-guard-soak.md) § L3b.
 
 Manual confirm on target SSD (still recommended before public tag):
 

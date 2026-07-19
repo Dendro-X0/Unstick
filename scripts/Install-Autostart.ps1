@@ -46,10 +46,10 @@ if ($Tray) {
 }
 
 if ($StartNow) {
-    Start-Process -FilePath $Service
-    Write-Host "Started guardian-service."
+    Start-Process -FilePath $Service -WindowStyle Hidden
+    Write-Host "Started guardian-service (no console)."
     if ($Tray -and (Test-Path $TrayExe)) {
-        Start-Process -FilePath $TrayExe -ArgumentList "--tray"
+        Start-Process -FilePath $TrayExe -ArgumentList "--tray" -WindowStyle Hidden
         Write-Host "Started guardian-tray."
     }
 }

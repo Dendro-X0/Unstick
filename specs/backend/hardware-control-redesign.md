@@ -78,7 +78,7 @@ u_mem  = g(commit, avail, paging) / mem_ceiling_norm
 Target:
 
 ```text
-u_set ∈ [0.97, 0.99]   # hold just under cliff
+u_set ∈ [0.80, 0.88]   # freeze-safe headroom (was 0.97–0.99; see freeze-safe-dynamic-control-design.md)
 ```
 
 Controller (v1 exploration): **PI-like** or **bang-bang with hysteresis** on error `e = u - u_set`:
@@ -148,17 +148,18 @@ Suggested first version tag after D1–D3 land: **`v0.4.0` (Hardware control)** 
 
 - Module: `guardian-core::envelope` — idle window (quiet + ARMED + Normal) → p50/p95 latency/queue/avail.
 - Until primed: ceilings = Soft lines (conservative). After ≥30 idle samples: lift toward ~98% of Hard; persist `%LOCALAPPDATA%\Unstick\envelope_profile.json`.
-- Status: `envelope` (`calibrated`, ceilings, `u_disk` / `u_mem`, `u_set_lo/hi` 0.97–0.99). **No actuation change** (D3).
+- Status: `envelope` (`calibrated`, ceilings, `u_disk` / `u_mem`, `u_set_lo/hi` **0.80–0.88** freeze-safe band; see `freeze-safe-dynamic-control-design.md`).
 
 ## D3 notes
 
-- Module: `guardian-core::control` — bang-bang on `u_disk` vs `u_set_lo`/`u_set_hi` with 2-tick hold.
-- Intensity 1→EcoQoS+BelowNormal, 2→+VeryLow I/O, 3→+Idle; never Suspend. Config: `disk_control_enabled` (default true).
+- Module: `guardian-core::control` — bang-bang on `u_disk` vs `u_set_lo`/`u_set_hi` with 2-tick **escalation** hold, 0-tick release, stress band shift, soft intensity cap 2.
+- Intensity 1→EcoQoS+BelowNormal, 2→+VeryLow I/O (default max); never Suspend. Config: `disk_control_enabled` (default true).
+- Soft demotion TTL (`max_soft_demote_secs`, default 45) + fast release when `u` eases.
 - Status: `disk_control_intensity`, `disk_control_mode` (`released`/`holding`/`capping`). Soft Disk Lock bands still run as a parallel safety net.
 
 ## D4 notes
 
-- Same bang-bang loop on `u_mem`; intensity 1→EcoQoS+mem-prio, 2–3→+WS trim **only when** `paging_pressure_evidence` (mapped-I/O / IDE FP safe).
+- Same bang-bang loop on `u_mem`; intensity 1→EcoQoS+mem-prio, 2→+WS trim **only when** `paging_pressure_evidence` (mapped-I/O / IDE FP safe).
 - Config: `mem_control_enabled` (default true). Status: `mem_control_intensity`, `mem_control_mode`. Never Suspend.
 
 ## D5 notes
@@ -171,9 +172,9 @@ Suggested first version tag after D1–D3 land: **`v0.4.0` (Hardware control)** 
 
 | Risk | Mitigation |
 |------|------------|
-| 97–99% of wrong ceiling → still freezes | Prefer latency/paging over busy%; widen deadband until calibrated |
+| Sitting near cliff utilization still freezes | Freeze-safe 0.80–0.88 band + stress headroom shift |
 | Calibration never sees real cliff | Keep conservative bootstrap; optional guided “learn” soak |
-| Continuous EcoQoS thrash | Hysteresis + min hold time per intensity step |
+| Continuous EcoQoS thrash | Escalation hold + soft TTL recovery windows |
 | Users expect “damage prevention” | Docs claim freeze mitigation only |
 
 ## First atomic step after approval of this doc

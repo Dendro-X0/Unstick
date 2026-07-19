@@ -520,7 +520,39 @@ impl UnstickApp {
             if let Some(tw) = tripwire {
                 ui.add_space(8.0);
                 ui.horizontal_centered(|ui| {
-                    widgets::status_chip(ui, format!("tripwire · {tw}"), CORAL);
+                    let disk_i = status.map(|s| s.disk_control_intensity).unwrap_or(0);
+                    let mem_i = status.map(|s| s.mem_control_intensity).unwrap_or(0);
+                    let (label, color) = if controlling {
+                        let mut parts = Vec::new();
+                        if disk_ctrl_mode != DiskControlMode::Released {
+                            parts.push(format!("disk i{disk_i}"));
+                        }
+                        if mem_ctrl_mode != DiskControlMode::Released {
+                            parts.push(format!("ram i{mem_i}"));
+                        }
+                        let detail = if parts.is_empty() {
+                            "soft capping".into()
+                        } else {
+                            format!("soft capping · {}", parts.join(" · "))
+                        };
+                        (format!("{tw} — {detail}"), CORAL)
+                    } else {
+                        (
+                            format!("{tw} — monitoring (u below band)"),
+                            theme::AMBER,
+                        )
+                    };
+                    widgets::status_chip(ui, label, color).on_hover_text(
+                        "Tripwire = sensing pressure. Soft capping = actively demoting background offenders. Monitoring without capping is normal for brief spikes.",
+                    );
+                });
+            } else if controlling {
+                ui.add_space(8.0);
+                ui.horizontal_centered(|ui| {
+                    widgets::status_chip(ui, "Hardware control · actively capping", theme::AMBER)
+                        .on_hover_text(
+                            "Closed-loop soft control is demoting background disk/RAM offenders.",
+                        );
                 });
             }
             if let Some(adv) = status.and_then(|s| s.dpc_advisory.as_ref()) {
@@ -1256,11 +1288,22 @@ fn event_row(ui: &mut egui::Ui, ev: &GuardianEvent) {
             level,
             reason,
             at,
-        } => (
-            "throttle",
-            format!("{name} pid {pid} {:?} · {reason}", level),
-            at.format("%H:%M:%S").to_string(),
-        ),
+        } => {
+            let kind = if reason.starts_with("disk_control:")
+                || reason.starts_with("mem_control:")
+                || reason.starts_with("disk_lock:")
+                || reason.starts_with("mem_lock:")
+            {
+                "capped"
+            } else {
+                "throttle"
+            };
+            (
+                kind,
+                format!("{name} pid {pid} {:?} · {reason}", level),
+                at.format("%H:%M:%S").to_string(),
+            )
+        }
         GuardianEvent::Suspend {
             name,
             pid,

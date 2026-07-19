@@ -1,16 +1,30 @@
 //! Soft-axis closed-loop control (Option 2 / D3 disk + D4 memory).
 //!
-//! Bang-bang with hysteresis around envelope `u_set_lo`..=`u_set_hi` (~0.97–0.99).
+//! Bang-bang with hysteresis around envelope `u_set_lo`..=`u_set_hi` (freeze-safe headroom).
 //! Soft actuators only — never NtSuspend. Memory WS trim is paging-gated (L4).
+//! Release is biased: demotions clear quickly when load eases; soft TTL elsewhere.
+//! Stress headroom: hard latency / Disk|Mem Hard / paging / thermal-power → lower band.
 
 use serde::{Deserialize, Serialize};
 
+use crate::advisory::{CoolingMode, ThermalLevel};
 use crate::policy::{PlannedAction, PolicyEngine};
 use crate::types::{SystemSample, ThrottleLevel};
 
-const MAX_INTENSITY: u8 = 3;
-/// Minimum ticks between intensity steps (anti-chatter).
-const MIN_HOLD_TICKS: u32 = 2;
+/// Soft intensity ceiling (EcoQoS + I/O / mem-prio). Idle class avoided by default (feels hung).
+const MAX_INTENSITY: u8 = 2;
+/// Minimum ticks between *escalation* steps (anti-chatter).
+const MIN_HOLD_ESCALATE: u32 = 2;
+/// When stressed (latency / Hard lock / paging / thermal), shift band down for more headroom.
+pub const STRESS_BAND_SHIFT: f32 = 0.12;
+/// Clear all intensity when u falls this fraction of u_lo.
+const FULL_RELEASE_RATIO: f32 = 0.70;
+
+/// Thermal/power constraint → demand more headroom (same band shift as disk/paging stress).
+pub fn thermal_power_stress(thermal: ThermalLevel, cooling: CoolingMode) -> bool {
+    matches!(thermal, ThermalLevel::Fair | ThermalLevel::Serious)
+        || cooling == CoolingMode::Passive
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -46,8 +60,8 @@ impl Default for DiskControlState {
             intensity: 0,
             mode: DiskControlMode::Released,
             u_disk: 0.0,
-            u_set_lo: 0.97,
-            u_set_hi: 0.99,
+            u_set_lo: 0.80,
+            u_set_hi: 0.88,
         }
     }
 }
@@ -92,10 +106,21 @@ impl DiskControlLoop {
         self.intensity
     }
 
-    /// Step the bang-bang controller. One intensity step per call when outside the band.
-    pub fn step(&mut self, u_disk: f32, u_set_lo: f32, u_set_hi: f32) -> DiskControlState {
-        let u_lo = u_set_lo.min(u_set_hi);
-        let u_hi = u_set_lo.max(u_set_hi);
+    /// Step the bang-bang controller.
+    /// `stress`: latency Hard / Disk Hard / paging — demand more headroom (lower band).
+    pub fn step(
+        &mut self,
+        u_disk: f32,
+        u_set_lo: f32,
+        u_set_hi: f32,
+        stress: bool,
+    ) -> DiskControlState {
+        let mut u_lo = u_set_lo.min(u_set_hi);
+        let mut u_hi = u_set_lo.max(u_set_hi);
+        if stress {
+            u_lo = (u_lo - STRESS_BAND_SHIFT).max(0.45);
+            u_hi = (u_hi - STRESS_BAND_SHIFT).max(u_lo + 0.04);
+        }
 
         if !self.enabled {
             return DiskControlState {
@@ -107,27 +132,31 @@ impl DiskControlLoop {
             };
         }
 
+        // Hold only blocks escalation; release is always allowed.
+        let holding_escalate = self.hold_ticks > 0;
         if self.hold_ticks > 0 {
             self.hold_ticks -= 1;
-            return self.state(u_disk, u_lo, u_hi);
         }
 
-        if u_disk > u_hi {
-            if self.intensity < MAX_INTENSITY {
-                self.intensity += 1;
-                self.hold_ticks = MIN_HOLD_TICKS;
-            }
-            self.mode = DiskControlMode::Capping;
+        if u_disk < u_lo * FULL_RELEASE_RATIO {
+            self.intensity = 0;
+            self.hold_ticks = 0;
+            self.mode = DiskControlMode::Released;
         } else if u_disk < u_lo {
             if self.intensity > 0 {
                 self.intensity -= 1;
-                self.hold_ticks = MIN_HOLD_TICKS;
             }
             self.mode = if self.intensity == 0 {
                 DiskControlMode::Released
             } else {
                 DiskControlMode::Holding
             };
+        } else if u_disk > u_hi {
+            if !holding_escalate && self.intensity < MAX_INTENSITY {
+                self.intensity += 1;
+                self.hold_ticks = MIN_HOLD_ESCALATE;
+            }
+            self.mode = DiskControlMode::Capping;
         } else {
             self.mode = if self.intensity == 0 {
                 DiskControlMode::Released
@@ -137,6 +166,11 @@ impl DiskControlLoop {
         }
 
         self.state(u_disk, u_lo, u_hi)
+    }
+
+    /// Backward-compatible step without stress flag.
+    pub fn step_simple(&mut self, u_disk: f32, u_set_lo: f32, u_set_hi: f32) -> DiskControlState {
+        self.step(u_disk, u_set_lo, u_set_hi, false)
     }
 
     fn state(&self, u_disk: f32, u_lo: f32, u_hi: f32) -> DiskControlState {
@@ -329,52 +363,116 @@ mod tests {
     #[test]
     fn escalates_above_setpoint_hi() {
         let mut loop_ = DiskControlLoop::new(true);
-        let s = loop_.step(1.05, U_SET_LO, U_SET_HI);
+        let s = loop_.step(1.05, U_SET_LO, U_SET_HI, false);
         assert_eq!(s.intensity, 1);
         assert_eq!(s.mode, DiskControlMode::Capping);
-        // hold ticks
-        let s = loop_.step(1.05, U_SET_LO, U_SET_HI);
+        // escalation hold ticks
+        let s = loop_.step(1.05, U_SET_LO, U_SET_HI, false);
         assert_eq!(s.intensity, 1);
-        let s = loop_.step(1.05, U_SET_LO, U_SET_HI);
+        let s = loop_.step(1.05, U_SET_LO, U_SET_HI, false);
         assert_eq!(s.intensity, 1);
-        let s = loop_.step(1.05, U_SET_LO, U_SET_HI);
+        let s = loop_.step(1.05, U_SET_LO, U_SET_HI, false);
         assert_eq!(s.intensity, 2);
+        assert!(s.intensity <= MAX_INTENSITY);
     }
 
     #[test]
-    fn releases_below_setpoint_lo() {
+    fn full_release_when_well_below_lo() {
         let mut loop_ = DiskControlLoop::new(true);
         for _ in 0..12 {
-            let _ = loop_.step(1.2, U_SET_LO, U_SET_HI);
+            let _ = loop_.step(1.2, U_SET_LO, U_SET_HI, false);
         }
         assert_eq!(loop_.intensity(), MAX_INTENSITY);
-        // Drop below lo and wait through holds
-        for _ in 0..20 {
-            let _ = loop_.step(0.5, U_SET_LO, U_SET_HI);
-        }
-        assert_eq!(loop_.intensity(), 0);
-        let s = loop_.step(0.5, U_SET_LO, U_SET_HI);
+        // u < 0.70 × u_lo → clear in one tick (no release hold)
+        let s = loop_.step(0.50, U_SET_LO, U_SET_HI, false);
+        assert_eq!(s.intensity, 0);
         assert_eq!(s.mode, DiskControlMode::Released);
+    }
+
+    #[test]
+    fn releases_stepwise_just_below_lo() {
+        let mut loop_ = DiskControlLoop::new(true);
+        for _ in 0..12 {
+            let _ = loop_.step(1.2, U_SET_LO, U_SET_HI, false);
+        }
+        assert_eq!(loop_.intensity(), MAX_INTENSITY);
+        // Just under lo but above full-release ratio — step down without hold.
+        let just_under = U_SET_LO * 0.85;
+        assert!(just_under >= U_SET_LO * FULL_RELEASE_RATIO);
+        let s = loop_.step(just_under, U_SET_LO, U_SET_HI, false);
+        assert_eq!(s.intensity, MAX_INTENSITY - 1);
+        let s = loop_.step(just_under, U_SET_LO, U_SET_HI, false);
+        assert_eq!(s.intensity, MAX_INTENSITY - 2);
     }
 
     #[test]
     fn holds_inside_band() {
         let mut loop_ = DiskControlLoop::new(true);
-        let _ = loop_.step(1.1, U_SET_LO, U_SET_HI);
-        // drain hold
-        let _ = loop_.step(0.98, U_SET_LO, U_SET_HI);
-        let _ = loop_.step(0.98, U_SET_LO, U_SET_HI);
-        let s = loop_.step(0.98, U_SET_LO, U_SET_HI);
+        let _ = loop_.step(1.1, U_SET_LO, U_SET_HI, false);
+        let mid = (U_SET_LO + U_SET_HI) * 0.5;
+        let s = loop_.step(mid, U_SET_LO, U_SET_HI, false);
         assert_eq!(s.intensity, 1);
         assert_eq!(s.mode, DiskControlMode::Holding);
     }
 
     #[test]
+    fn stress_shifts_band_down() {
+        let mut loop_ = DiskControlLoop::new(true);
+        // Under stress, band is ~0.68–0.76 so 0.82 is above stressed hi → capping.
+        let s = loop_.step(0.82, U_SET_LO, U_SET_HI, true);
+        assert_eq!(s.intensity, 1);
+        assert_eq!(s.mode, DiskControlMode::Capping);
+        assert!(s.u_set_hi < U_SET_HI);
+        assert!((s.u_set_lo - (U_SET_LO - STRESS_BAND_SHIFT)).abs() < 0.001);
+    }
+
+    #[test]
+    fn thermal_power_stress_flags() {
+        use crate::advisory::{CoolingMode, ThermalLevel};
+        assert!(!thermal_power_stress(
+            ThermalLevel::Nominal,
+            CoolingMode::Active
+        ));
+        assert!(thermal_power_stress(
+            ThermalLevel::Fair,
+            CoolingMode::Active
+        ));
+        assert!(thermal_power_stress(
+            ThermalLevel::Serious,
+            CoolingMode::Active
+        ));
+        assert!(thermal_power_stress(
+            ThermalLevel::Nominal,
+            CoolingMode::Passive
+        ));
+    }
+
+    #[test]
+    fn thermal_stress_matches_disk_stress_shift() {
+        let mut calm = DiskControlLoop::new(true);
+        let mut hot = DiskControlLoop::new(true);
+        let mid = (U_SET_LO + U_SET_HI) * 0.5;
+        let calm_s = calm.step(mid, U_SET_LO, U_SET_HI, false);
+        let hot_s = hot.step(mid, U_SET_LO, U_SET_HI, true);
+        // Mid-band under calm stays released/holding at 0; under thermal stress mid is above lowered hi.
+        assert_eq!(calm_s.intensity, 0);
+        assert_eq!(hot_s.intensity, 1);
+        assert_eq!(hot_s.mode, DiskControlMode::Capping);
+    }
+
+    #[test]
     fn disabled_stays_released() {
         let mut loop_ = DiskControlLoop::new(false);
-        let s = loop_.step(2.0, U_SET_LO, U_SET_HI);
+        let s = loop_.step(2.0, U_SET_LO, U_SET_HI, false);
         assert_eq!(s.intensity, 0);
         assert_eq!(s.mode, DiskControlMode::Released);
+    }
+
+    #[test]
+    fn freeze_safe_setpoints_leave_headroom() {
+        assert!((U_SET_LO - 0.80).abs() < f32::EPSILON);
+        assert!((U_SET_HI - 0.88).abs() < f32::EPSILON);
+        assert!(U_SET_HI < 0.95);
     }
 
     #[test]

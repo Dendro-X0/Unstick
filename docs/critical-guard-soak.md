@@ -1,15 +1,17 @@
-{69E6BE21-64E1-494F-BA33-52CF702682A6}.png# Critical Guard soak checklist (L3 / L4)
+# Critical Guard soak checklist (L3 / L4)
 
 ## L3 — Freeze prevention soak
 
 1. Start `guardian-service`, then `guardian-ui`.
-2. Confirm **Critical Guard** checkbox is ON and “0 suspended”.
+2. Confirm **Hardware Guard** checkbox is ON and Soft-only path (0 suspended expected).
 3. Run a heavy workload: `cargo build --release` in a large crate, plus Node/MCP fan-out if available.
 4. Watch pressure band; under high RAM/disk it may enter `throttle` / `emergency`.
 5. Desktop must stay interactive (move windows / type within ~1s).
-6. If emergency fires, Monitor shows suspended PIDs; they resume when pressure drops or after `max_suspend_secs` (45s).
-7. Toggle Critical Guard OFF → all suspended processes resume immediately.
-8. Pause 15m from CTA → no new throttles/suspends.
+6. Distinguish **sensing** (EMERGENCY / tripwire · monitoring) from **capping** (Disk/RAM cap chips or tripwire · soft capping). Brief spikes often sense without capping.
+7. If emergency fires with experimental Suspend, Monitor shows suspended PIDs; they resume when pressure drops or after `max_suspend_secs` (45s). Soft path: Event log shows **capped** / restore instead.
+8. Toggle Hardware Guard OFF → soft demotions restore; any suspended processes resume.
+9. Pause 15m from CTA → no new throttles/suspends.
+10. **Thermal note (optional):** on battery or when Windows reports Passive cooling / thermal Fair|Serious, control band shifts lower (more headroom). Confirm “Thermal · fair/serious” chip and earlier capping under the same `u` than on AC/Nominal.
 
 ## L3b — Disk Lock soak (OS drive saturation)
 
@@ -19,13 +21,29 @@ Automated probe (low soft busy% + disk load):
 powershell -File scripts/Verify-DiskLock-L3.ps1
 ```
 
+Manual / freeze-cliff soak (`disk_hog` is a **fixture**, not a product feature):
+
+```bash
+# Default soak: 1024 MiB × ~3 min
+cargo run --release --manifest-path fixtures/disk_hog/Cargo.toml
+
+# Cliff preset: 2048 MiB × ~5 min (sustained OS-volume pressure)
+cargo run --release --manifest-path fixtures/disk_hog/Cargo.toml -- cliff
+
+# Custom: MiB secs (MiB 64–8192, secs 15–1800)
+cargo run --release --manifest-path fixtures/disk_hog/Cargo.toml -- 1536 240
+```
+
+Ensure `%TEMP%` (or the hog path printed) lives on the **OS / pagefile volume**. Pair with `mem_hog` if you need dual-axis pressure.
+
 1. Open Task Manager → Performance → Disk 1 (system / page file drive).
 2. Confirm Guard **DISK** gauge tracks Active Time within ~15% once PDH is primed.
 3. Under sustained disk saturation, Guard shows **Disk Lock SOFT · N%** (amber) using **this machine's calibrated** soft threshold.
-4. Under harder saturation, shows **Disk Lock HARD · N%** (coral) and may suspend top disk offenders.
-5. Whitelisted / Explorer / Cursor never appear in suspended list.
-6. Recent throttles show reasons `disk_lock:soft` / `disk_lock:hard`.
+4. Under harder saturation, shows **Disk Lock HARD · N%** (coral); Soft-only path shows **soft capping** / Event log **capped** (not Suspend).
+5. Distinguish tripwire **monitoring (u below band)** vs **soft capping · disk iN** — brief spikes often only monitor.
+6. Whitelisted / Explorer / Cursor never appear in suspended list.
 7. After ~40 samples, `disk_calibrated` is true in status; profile persists under `%LOCALAPPDATA%\Unstick\disk_profile.json`.
+8. Stop hog → control mode returns toward **released**; soft demotions restore (or TTL ~45s).
 
 ## L3c — Mem Lock soak (RAM pressure / WS trim)
 

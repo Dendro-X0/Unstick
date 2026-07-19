@@ -66,13 +66,18 @@ The UI is **on demand** — it does not need to stay open for protection to work
 
 There is no in-app auto-updater yet. Public builds should be Authenticode-signed when a signing cert is available; unsigned zips are for private beta only.
 
+Service and UI are **Windows GUI-subsystem** binaries — they do not open a console. Logs: `%LOCALAPPDATA%\Unstick\guardian.log*`. For a debug console on the service: set `UNSTICK_CONSOLE=1` before launch.
+
 ## Hardware control (primary)
 
 On the **Guard** tab → **Controls**:
 
 - Shows live **envelope** (learning idle → calibrated), **u_disk** / **u_mem**, and control mode (`released` / `holding` / `capping`) with intensity.
-- Closed-loop soft capping targets ~**97–99%** of the freeze cliff for OS disk and RAM.
-- Chips on the hero: **Disk cap** / **RAM cap** when actively controlling.
+- Closed-loop soft capping holds OS disk/RAM near **80–88%** of the calibrated freeze cliff (headroom), not at the cliff itself.
+- Under hard latency / Disk Hard / paging stress, the band shifts lower for more headroom.
+- Soft demotions auto-restore after ~45s even if pressure remains (brief recovery window), and release immediately when utilization eases.
+- **Thermal / power stress** (Fair/Serious thermal or Passive cooling) shifts the control band lower for more headroom — load **relief**, not hardware-damage prevention.
+- Chips on the hero: **Disk cap** / **RAM cap** when actively controlling; tripwire lines show **monitoring** vs **soft capping**.
 
 Leave **Hardware Guard** checked (ARMED). Soft only is the product path.
 
@@ -103,14 +108,17 @@ Open the `.etl` in **Windows Performance Analyzer** → add **DPC/ISR** by modul
 
 ## Limits / honesty
 
-Unstick is a **user-mode** Guard. It cannot:
+Unstick is a **user-mode** Guard for **freeze mitigation** and **load/thermal relief**. It cannot:
 
 - Cure kernel DPC/ISR latency (drivers) — it only advises and points you at WPR/WPA
 - Guarantee zero hitching under Extreme memory pressure
 - Replace Task Manager, Resource Monitor, or antivirus
-- Prevent hardware damage (firmware/SMART/thermal still own that)
+- **Prevent hardware damage** — firmware, SMART, and thermal hardware still own that. “Overload protection” here means **easing background load** and demanding more headroom when the machine is thermally/power constrained, not stopping component failure.
+- Boost game FPS via overclocking or GPU clock tools — that is outside scope
 
 Soft remediation uses **EcoQoS** and **memory priority** (Microsoft Efficiency Mode style). **NtSuspend is not part of the product path** unless you explicitly opt in (see Hardware Guard).
+
+On Guard, **tripwires / EMERGENCY** mean Unstick is **sensing** pressure. **Disk cap / RAM cap** mean it is **actively soft-capping** offenders. Sensing without capping is normal when utilization is below the freeze-safe band or the spike is too brief.
 
 ## Whitelist
 

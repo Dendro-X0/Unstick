@@ -58,8 +58,10 @@
 
 1. Large circular CTA: **ARMED** / **PAUSED** — click Pause 15m / Resume
 2. Centered pressure cluster: small **PRESSURE** label, band chip, score
-3. Compact status chips when relevant (Disk/RAM control capping·holding, Disk Lock / Mem Lock, suspended) — centered under CTA
+3. Compact status chips when relevant — **sensing vs capping**: tripwire lines show `monitoring (u below band)` or `soft capping · disk iN`; Disk/RAM control capping·holding chips; Disk Lock / Mem Lock; suspended — centered under CTA
 4. Centered **Controls** pill (collapsed by default)
+
+Claim UX: EMERGENCY/tripwire alone does **not** imply a freeze was averted — only **cap/hold** chips mean soft actuators ran.
 
 ### Secondary — collapsible **Controls** strip (collapsed by default)
 

@@ -1,8 +1,8 @@
 # Unstick
 # https://github.com/Dendro-X0/Unstick
 
-**Windows-only** portable Guard that protects the OS drive (SSD/HDD) and RAM under pressure.  
-**v0.3:** Soft Disk/Mem Lock + EcoQoS. **Option 2 (D0–D5):** closed-loop hardware control — [design](specs/backend/hardware-control-redesign.md).
+**Windows-only** portable Guard that protects the OS drive (SSD/HDD) and RAM under pressure — freeze mitigation + load/thermal relief.  
+**Current:** **v0.5.0** ([release notes](docs/RELEASE-v0.5.0.md), unsigned zip) — [north-star](specs/backend/hardware-control-north-star.md). Prior: v0.4 closed-loop · v0.3 EcoQoS.
 
 See: [specs/backend/guardian-design.md](specs/backend/guardian-design.md) · [docs/USER-GUIDE.md](docs/USER-GUIDE.md) · [docs/roadmap-next-release.md](docs/roadmap-next-release.md)
 

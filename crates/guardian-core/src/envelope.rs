@@ -11,9 +11,10 @@ use crate::types::SystemSample;
 
 const IDLE_WINDOW: usize = 64;
 const MIN_IDLE_SAMPLES: u32 = 30;
-/// Hold utilization just under the freeze cliff (D3 will close the loop).
-pub const U_SET_LO: f32 = 0.97;
-pub const U_SET_HI: f32 = 0.99;
+/// Hold utilization with real headroom under the freeze cliff (freeze-safe band).
+/// Sitting at 0.97–0.99 left too little latency budget and could still lock the UI.
+pub const U_SET_LO: f32 = 0.80;
+pub const U_SET_HI: f32 = 0.88;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvelopeSnapshot {

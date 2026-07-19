@@ -8,12 +8,13 @@ use chrono::Utc;
 use guardian_core::{
     classify_dpc_isr, classify_focus_profile, dpc_advisory_message, dpc_isr_raw_level,
     events_path, load_config, recent_events_for_client, save_config, score_pressure_tracked,
-    status_path, thermal_advisory_message, ActionPlan, ApplyDeniedSummary, ClientRequest,
-    CriticalGuardMode, DiskCalibrator, DiskControlLoop, DiskLockMode, EnvelopeCalibrator,
-    GuardianConfig, GuardianEvent, HysteresisTracker, MemControlLoop, merge_control_actions,
-    paging_pressure_evidence, plan_disk_control_actions, plan_mem_control_actions,
-    MemLockMode, MemLockThresholds, PressureBand, PressureInputs, PressureState, ServerPush,
-    StatusSnapshot, SuspendedSummary, ThrottleLevel, AbuseSummary, ThrottleSummary, plan_qos,
+    status_path, thermal_advisory_message, thermal_power_stress, ActionPlan, ApplyDeniedSummary,
+    ClientRequest, CriticalGuardMode, DiskCalibrator, DiskControlLoop, DiskLockMode,
+    EnvelopeCalibrator, GuardianConfig, GuardianEvent, HysteresisTracker, MemControlLoop,
+    merge_control_actions, paging_pressure_evidence, plan_disk_control_actions,
+    plan_mem_control_actions, MemLockMode, MemLockThresholds, PressureBand, PressureInputs,
+    PressureState, ServerPush, StatusSnapshot, SuspendedSummary, ThrottleLevel, AbuseSummary,
+    ThrottleSummary, plan_qos,
 };
 use guardian_detect::{apply_parent_anomaly, AbuseDetector};
 use guardian_win::{elevation_likely, ThrottleExecutor, WinSensor};
@@ -414,6 +415,8 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
     g.detector.reload_trust(&cfg);
     g.throttle.set_job_cpu_rate(cfg.job_cpu_rate_percent);
     g.throttle.ledger.set_max_secs(cfg.max_suspend_secs);
+    g.throttle
+        .set_max_soft_demote_secs(cfg.max_soft_demote_secs);
     g.disk_cal.sync_from_config(&cfg);
     g.envelope_cal.sync_from_config(&cfg);
     g.disk_control.set_enabled(cfg.disk_control_enabled);
@@ -474,23 +477,42 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
         cfg.emergency_suspend,
         disk_thr.soft_queue,
     );
+    let paging = paging_pressure_evidence(&inputs);
+    let thermal_stress =
+        thermal_power_stress(sample.thermal_level, sample.cooling_mode);
+    let disk_stress = pressure.disk_lock == DiskLockMode::Hard
+        || (sample.disk_latency_sec > 0.0
+            && sample.disk_latency_sec >= cfg.disk_latency_hard_sec)
+        || thermal_stress;
+    let mem_stress =
+        paging || pressure.mem_lock == MemLockMode::Hard || thermal_stress;
+
     let disk_ctrl = if paused || !cfg.emergency_suspend {
         g.disk_control.set_enabled(false);
-        g.disk_control.step(0.0, envelope.u_set_lo, envelope.u_set_hi)
+        g.disk_control
+            .step(0.0, envelope.u_set_lo, envelope.u_set_hi, false)
     } else {
         g.disk_control.set_enabled(cfg.disk_control_enabled);
-        g.disk_control
-            .step(envelope.u_disk, envelope.u_set_lo, envelope.u_set_hi)
+        g.disk_control.step(
+            envelope.u_disk,
+            envelope.u_set_lo,
+            envelope.u_set_hi,
+            disk_stress,
+        )
     };
     let mem_ctrl = if paused || !cfg.emergency_suspend {
         g.mem_control.set_enabled(false);
-        g.mem_control.step(0.0, envelope.u_set_lo, envelope.u_set_hi)
+        g.mem_control
+            .step(0.0, envelope.u_set_lo, envelope.u_set_hi, false)
     } else {
         g.mem_control.set_enabled(cfg.mem_control_enabled);
-        g.mem_control
-            .step(envelope.u_mem, envelope.u_set_lo, envelope.u_set_hi)
+        g.mem_control.step(
+            envelope.u_mem,
+            envelope.u_set_lo,
+            envelope.u_set_hi,
+            mem_stress,
+        )
     };
-    let paging = paging_pressure_evidence(&inputs);
 
     if pressure.band != g.last_band {
         g.push_event(GuardianEvent::Pressure {
@@ -755,6 +777,8 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
         // D1: restore EcoQoS / mem-prio / priority for PIDs no longer in the plan.
         let plan_pids: std::collections::HashSet<u32> =
             plan.actions.iter().map(|a| a.pid).collect();
+        // Soft TTL: force Normal even if still planned — next tick may re-demote under pressure.
+        let _ = g.throttle.expire_soft_demotions();
         g.throttle.restore_not_in_plan(&plan_pids);
     }
 

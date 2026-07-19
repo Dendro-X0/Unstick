@@ -46,6 +46,9 @@ pub struct GuardianConfig {
     pub max_suspend_pids: usize,
     #[serde(default = "default_max_suspend_secs")]
     pub max_suspend_secs: u64,
+    /// Soft demotion TTL: force restore EcoQoS/priority even if still in plan (recovery window).
+    #[serde(default = "default_max_soft_demote_secs")]
+    pub max_soft_demote_secs: u64,
     /// Disk Lock: PDH-driven soft/hard actions on system disk saturation.
     #[serde(default = "default_true")]
     pub disk_lock_enabled: bool,
@@ -113,6 +116,9 @@ fn default_max_suspend_pids() -> usize {
 fn default_max_suspend_secs() -> u64 {
     45
 }
+fn default_max_soft_demote_secs() -> u64 {
+    45
+}
 fn default_disk_busy_soft() -> f32 {
     85.0
 }
@@ -157,6 +163,7 @@ impl Default for GuardianConfig {
             suspend_escalation_streak: 3,
             max_suspend_pids: 6,
             max_suspend_secs: 45,
+            max_soft_demote_secs: 45,
             disk_lock_enabled: true,
             disk_control_enabled: true,
             mem_control_enabled: true,
@@ -312,6 +319,7 @@ mod tests {
         assert_eq!(cfg.suspend_escalation_streak, 3);
         assert_eq!(cfg.max_suspend_pids, 6);
         assert_eq!(cfg.max_suspend_secs, 45);
+        assert_eq!(cfg.max_soft_demote_secs, 45);
         assert!(cfg.disk_lock_enabled);
         assert!(cfg.disk_lock_adaptive);
         assert_eq!(cfg.disk_busy_soft_pct, 85.0);
