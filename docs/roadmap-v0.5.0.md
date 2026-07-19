@@ -91,4 +91,4 @@ flowchart LR
 - [x] No console window on service/UI start  
 - [x] Portable `Unstick-0.5.0-windows-x64.zip`  
 - [x] USER-GUIDE + RELEASE match behavior  
-- [ ] Optional: git tag `v0.5.0` + GitHub release asset upload  
+- [x] Optional: git tag `v0.5.0` + GitHub release asset upload  

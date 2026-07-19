@@ -38,7 +38,7 @@ flowchart LR
 
 ## After v0.5.0 (next)
 
-- [ ] Git tag `v0.5.0` + GitHub release asset (when network allows)  
+- [x] Git tag `v0.5.0` + GitHub release asset (unsigned zip)  
 - [ ] Authenticode cert → signed Latest  
 - [ ] Optional Idle-under-stress Efficiency Mode (dedicated design)  
 - [ ] Optional Windows MSI/MSIX  
