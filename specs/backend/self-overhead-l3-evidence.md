@@ -41,3 +41,14 @@
 | v0.3.0 | 45.05 | **1.179** | `self-overhead-measure-v0.3.0-20260718-001131.csv` |
 
 Toward plan S4 (~≤1% one-core idle on soak machine): **PASS** on this sample (~1.18%).
+
+---
+
+## v0.5.0 baseline (v0.5.1 T4)
+
+| Label | WallSec | PctOneCore | CSV |
+|-------|---------|------------|-----|
+| v0.5.0-baseline | 45.08 | **1.456** | `self-overhead-measure-v0.5.0-baseline-20260718-205406.csv` |
+
+**Machine:** `XTZJ-20221014TG` · service-only idle · release `guardian-service` started by measure script.  
+**Note:** Slightly above the ~1.2% v0.3.0 sample (probe noise / north-star control path). Still well under “Guard is the freeze” territory. No code change required for 0.5.1 unless soak shows regression under busy.  

@@ -44,6 +44,7 @@ Ensure `%TEMP%` (or the hog path printed) lives on the **OS / pagefile volume**.
 6. Whitelisted / Explorer / Cursor never appear in suspended list.
 7. After ~40 samples, `disk_calibrated` is true in status; profile persists under `%LOCALAPPDATA%\Unstick\disk_profile.json`.
 8. Stop hog → control mode returns toward **released**; soft demotions restore (or TTL ~45s).
+9. Record the run in [`specs/backend/hardware-control-l3-cliff-evidence.md`](../specs/backend/hardware-control-l3-cliff-evidence.md) (v0.5.1 T2).
 
 ## L3c — Mem Lock soak (RAM pressure / WS trim)
 

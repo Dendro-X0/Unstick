@@ -4,7 +4,7 @@
 **Windows-only** portable Guard that protects the OS drive (SSD/HDD) and RAM under pressure — freeze mitigation + load/thermal relief.  
 **Current:** **v0.5.0** ([release notes](docs/RELEASE-v0.5.0.md), unsigned zip) — [north-star](specs/backend/hardware-control-north-star.md). Prior: v0.4 closed-loop · v0.3 EcoQoS.
 
-See: [specs/backend/guardian-design.md](specs/backend/guardian-design.md) · [docs/USER-GUIDE.md](docs/USER-GUIDE.md) · [docs/roadmap-next-release.md](docs/roadmap-next-release.md)
+See: [specs/backend/guardian-design.md](specs/backend/guardian-design.md) · [docs/USER-GUIDE.md](docs/USER-GUIDE.md) · [docs/roadmap-next-release.md](docs/roadmap-next-release.md) · [docs/roadmap-future.md](docs/roadmap-future.md)
 
 
 ## Quick start
