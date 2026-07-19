@@ -102,6 +102,9 @@ pub struct GuardianConfig {
     /// Hard Mem Lock requires paging_pressure_evidence.
     #[serde(default = "default_true")]
     pub mem_lock_hard_requires_paging: bool,
+    /// Last applied Guard profile (`dev` | `gaming` | `quiet`).
+    #[serde(default = "crate::profiles::default_active_profile")]
+    pub active_profile: String,
     pub allow_paths: Vec<String>,
     /// User whitelist: never soft-throttle, suspend, or terminate matching processes.
     /// Entries match executable name (e.g. `steam.exe`) or path substring (e.g. `\steam\`).
@@ -198,6 +201,7 @@ impl Default for GuardianConfig {
             mem_commit_hard_pct: 95.0,
             mem_lock_streak: 2,
             mem_lock_hard_requires_paging: true,
+            active_profile: crate::profiles::default_active_profile(),
             allow_paths: default_allow_paths(),
             whitelist: Vec::new(),
             protected_extra: Vec::new(),
@@ -244,6 +248,45 @@ pub fn events_path() -> PathBuf {
 
 pub fn status_path() -> PathBuf {
     config_dir().join("status.json")
+}
+
+pub fn config_export_path() -> PathBuf {
+    config_dir().join("exports").join("unstick-config.json")
+}
+
+pub fn config_import_path() -> PathBuf {
+    let preferred = config_dir().join("imports").join("unstick-config.json");
+    if preferred.exists() {
+        preferred
+    } else {
+        config_export_path()
+    }
+}
+
+/// Pretty-print config to the standard export path. Returns that path.
+pub fn export_config_json(cfg: &GuardianConfig) -> std::io::Result<PathBuf> {
+    let path = config_export_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let raw = serde_json::to_string_pretty(cfg).unwrap_or_else(|_| "{}".into());
+    fs::write(&path, raw)?;
+    Ok(path)
+}
+
+/// Load config JSON from import/export path; sanitize for live apply.
+pub fn import_config_json_from(path: &std::path::Path) -> Result<GuardianConfig, String> {
+    let raw = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let mut cfg: GuardianConfig =
+        serde_json::from_str(&raw).map_err(|e| format!("invalid JSON: {e}"))?;
+    cfg.pause_until = None;
+    cfg.normalize_whitelist();
+    cfg.normalize_suspend_product_path();
+    Ok(cfg)
+}
+
+pub fn import_config_json() -> Result<GuardianConfig, String> {
+    import_config_json_from(&config_import_path())
 }
 
 pub fn load_config() -> GuardianConfig {
@@ -402,5 +445,20 @@ mod tests {
         cfg.normalize_suspend_product_path();
         assert_eq!(cfg.critical_guard_mode, CriticalGuardMode::LastResortSuspend);
         assert!(cfg.suspend_allowed());
+    }
+
+    #[test]
+    fn export_import_round_trip_clears_pause() {
+        let dir = std::env::temp_dir().join(format!("unstick-export-test-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("unstick-config.json");
+        let mut cfg = GuardianConfig::default();
+        cfg.pause_until = Some(Utc::now());
+        assert!(cfg.add_whitelist("game.exe".into()));
+        fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+        let loaded = import_config_json_from(&path).unwrap();
+        assert!(loaded.pause_until.is_none());
+        assert!(loaded.whitelist.iter().any(|w| w == "game.exe"));
+        let _ = fs::remove_dir_all(&dir);
     }
 }

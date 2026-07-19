@@ -930,6 +930,88 @@ impl UnstickApp {
                             .size(12.0)
                             .color(TEXT),
                         );
+                        ui.add_space(6.0);
+                        session_actions_line(ui, s);
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new("Profile")
+                                .size(12.0)
+                                .strong()
+                                .color(TEXT_DIM),
+                        );
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            for (id, label, tip) in [
+                                (
+                                    "dev",
+                                    "Dev",
+                                    "Default Soft knobs + IDE whitelist merge. Soft only.",
+                                ),
+                                (
+                                    "gaming",
+                                    "Gaming",
+                                    "Launcher whitelist merge; slightly slower Efficiency Idle. Soft only — not a game booster.",
+                                ),
+                                (
+                                    "quiet",
+                                    "Quiet",
+                                    "Earlier Soft tripwires + faster Soft TTL restore. Soft only.",
+                                ),
+                            ] {
+                                let selected = s.active_profile.eq_ignore_ascii_case(id);
+                                let resp = ui.selectable_label(
+                                    selected,
+                                    egui::RichText::new(label)
+                                        .size(12.0)
+                                        .color(if selected { TEAL } else { TEXT_DIM }),
+                                );
+                                if resp.clicked() {
+                                    let _ = self.cmd_tx.send(ClientRequest::SetProfile {
+                                        profile: id.to_string(),
+                                    });
+                                }
+                                resp.on_hover_text(tip);
+                            }
+                        });
+                        ui.add_space(10.0);
+                        ui.label(
+                            egui::RichText::new("Tools")
+                                .size(12.0)
+                                .strong()
+                                .color(TEXT_DIM),
+                        );
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            if ui
+                                .small_button(egui::RichText::new("Export config").size(12.0))
+                                .on_hover_text(
+                                    "Write Soft settings JSON to %LOCALAPPDATA%\\Unstick\\exports\\unstick-config.json",
+                                )
+                                .clicked()
+                            {
+                                let _ = self.cmd_tx.send(ClientRequest::ExportConfig);
+                            }
+                            if ui
+                                .small_button(egui::RichText::new("Import config").size(12.0))
+                                .on_hover_text(
+                                    "Load JSON from exports\\ or imports\\unstick-config.json (clears pause).",
+                                )
+                                .clicked()
+                            {
+                                let _ = self.cmd_tx.send(ClientRequest::ImportConfig);
+                            }
+                            if ui
+                                .small_button(
+                                    egui::RichText::new("Prove Soft (90s)").size(12.0).color(theme::AMBER),
+                                )
+                                .on_hover_text(
+                                    "Opt-in: starts disk-hog 512 MiB × 90s on TEMP (OS volume). May stutter. Needs disk-hog.exe beside the service. Not a freeze-prevention demo.",
+                                )
+                                .clicked()
+                            {
+                                let _ = self.cmd_tx.send(ClientRequest::StartProveDiskHog);
+                            }
+                        });
                     } else {
                         ui.label(theme::dim("Waiting for service status…"));
                     }
@@ -1165,6 +1247,7 @@ impl UnstickApp {
                 .strong()
                 .color(TEXT_DIM),
         );
+        session_actions_line(ui, s);
         ui.label(theme::dim("Last actions from this session / events.jsonl"));
         ui.add_space(6.0);
         if events.is_empty() {
@@ -1292,6 +1375,34 @@ impl UnstickApp {
     }
 }
 
+fn session_actions_line(ui: &mut egui::Ui, s: &StatusSnapshot) {
+    let text = if s.session_capped == 0
+        && s.session_efficiency_idle == 0
+        && s.session_restored == 0
+        && s.session_suspended == 0
+    {
+        "This session · no Soft actions yet".to_string()
+    } else if s.session_suspended > 0 || s.session_resumed > 0 {
+        format!(
+            "This session · capped {} · idle {} · restored {} · suspend {}/{}",
+            s.session_capped,
+            s.session_efficiency_idle,
+            s.session_restored,
+            s.session_suspended,
+            s.session_resumed
+        )
+    } else {
+        format!(
+            "This session · capped {} · idle {} · restored {}",
+            s.session_capped, s.session_efficiency_idle, s.session_restored
+        )
+    };
+    ui.label(egui::RichText::new(text).size(12.0).color(TEXT_DIM))
+        .on_hover_text(
+            "Soft actuators applied / Efficiency Idle / Soft restored since service start. Not a freeze-prevention score.",
+        );
+}
+
 fn shorten_toast(msg: &str) -> String {
     // Service often returns "paused until <RFC3339>" — keep the hero clean.
     if let Some(rest) = msg.strip_prefix("paused until ") {
@@ -1352,11 +1463,18 @@ fn event_row(ui: &mut egui::Ui, ev: &GuardianEvent) {
             pid,
             reason,
             at,
-        } => (
-            "resume",
-            format!("{name} pid {pid} · {reason}"),
-            at.format("%H:%M:%S").to_string(),
-        ),
+        } => {
+            let kind = if reason.starts_with("soft_restore:") {
+                "restored"
+            } else {
+                "resume"
+            };
+            (
+                kind,
+                format!("{name} pid {pid} · {reason}"),
+                at.format("%H:%M:%S").to_string(),
+            )
+        }
         GuardianEvent::Abuse {
             name,
             pid,

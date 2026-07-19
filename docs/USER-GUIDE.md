@@ -55,6 +55,16 @@ pwsh -File Uninstall-Autostart.ps1 -StopProcesses -RemoveData
 
 The UI is **on demand** — it does not need to stay open for protection to work once the service is running.
 
+### Tray (optional)
+
+`guardian-tray.exe` (or Install-Autostart `-Tray`) shows pressure and Soft control without opening the UI:
+
+- **Tooltip / menu:** band + live control (`monitoring`, `disk cap i2`, `disk idle i3`, `paused`, …)
+- **Icon color:** teal calm → amber warn/hold → coral capping → magenta Efficiency Idle; white pip when actively capping/idle
+- Disk/Mem Lock **HARD** still pops a short toast
+
+This is live state only — session capped/restored totals stay on Monitor.
+
 ## Updating (portable)
 
 1. Download the latest `Unstick-*-windows-x64.zip` from the GitHub Release marked **Latest**.
@@ -89,6 +99,26 @@ When closed-loop has already been at **i2** for several ticks and the OS disk/RA
 
 Leave **Hardware Guard** checked (ARMED). Soft only is the product path.
 
+### Profiles (Dev / Gaming / Quiet)
+
+Under **Controls**, pick a Soft policy skin (same engine — not a booster):
+
+| Profile | What it does |
+|---------|----------------|
+| **Dev** | Default Soft thresholds; merges IDE names into whitelist |
+| **Gaming** | Merges common launcher names; slightly slower to Efficiency Idle |
+| **Quiet** | Earlier Soft tripwires + shorter Soft TTL (more headroom bias) |
+
+Whitelist merges are **additive** — your entries stay when you switch. Profiles never enable Suspend.
+
+### Tools (export / prove)
+
+Under **Controls → Tools**:
+
+- **Export config** — writes Soft settings JSON to `%LOCALAPPDATA%\Unstick\exports\unstick-config.json`
+- **Import config** — loads that file (or `imports\unstick-config.json` if present); clears any pause
+- **Prove Soft (90s)** — opt-in short `disk-hog` soak (512 MiB × 90s) if `disk-hog.exe` sits next to `guardian-service.exe`. May stutter; watch capping / session counts. Not a freeze-prevention demo. Build: `cargo build --release --manifest-path fixtures/disk_hog/Cargo.toml` then copy the exe beside the service.
+
 ### Advanced thresholds (optional)
 
 Under **Advanced thresholds ▸** (collapsed by default):
@@ -101,6 +131,8 @@ Presets remain available (`85/95`, `70/90`, `15/8`, `20/10`). These do **not** c
 ### Event log
 
 On the **Monitor** tab, the **Event log** shows recent throttle / suspend / resume / info lines from this session (and `events.jsonl` after a service restart).
+
+Above the log, **This session · capped / idle / restored** counts Soft actuators since the service started (Efficiency Idle subset under **idle**). These are actuator counts — **not** freezes prevented. Counters reset when `guardian-service` restarts.
 
 ### DPC / ISR warnings
 

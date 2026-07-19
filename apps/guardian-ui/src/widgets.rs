@@ -1,6 +1,6 @@
 use egui::{
-    Align2, Color32, CornerRadius, FontId, Pos2, Rect, Response, Sense, Shape, Stroke, Ui,
-    Vec2,
+    Align2, Color32, CornerRadius, FontId, Pos2, Rect, Response, Sense, Shape, Stroke,
+    StrokeKind, Ui, Vec2,
 };
 
 use crate::theme::{AMBER, BG_ELEV, BG_PANEL, BG_TAB, BG_TAB_ACTIVE, CORAL, LINE, RADIUS_MD, RADIUS_SM, TEAL, TEAL_DIM, TEXT, TEXT_DIM};
@@ -46,12 +46,16 @@ pub fn nav_tab_strip(ui: &mut Ui, labels: &[&str], active: usize) -> Option<usiz
     let gap = 5.0;
     let n = labels.len().max(1) as f32;
     let total_w = ui.available_width();
-    let tab_w = ((total_w - gap * (n - 1.0)) / n).max(90.0);
+    // Cap tab width so maximized windows don't stretch labels into empty slabs.
+    let tab_w = ((total_w - gap * (n - 1.0)) / n).clamp(96.0, 148.0);
+    let strip_w = tab_w * n + gap * (n - 1.0);
     let h = 40.0;
     let mut picked = None;
 
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = gap;
+        let pad = ((ui.available_width() - strip_w) * 0.5).max(0.0);
+        ui.add_space(pad);
         for (i, label) in labels.iter().enumerate() {
             if nav_tab_trapezoid(ui, label, i == active, tab_w, h).clicked() {
                 picked = Some(i);
@@ -179,7 +183,7 @@ pub fn led_gauge(ui: &mut Ui, label: &str, value01: f32, lit_segments: f32, widt
     );
 }
 
-/// Four equal-width responsive gauge columns with gutters.
+/// Four equal-width gauge columns — capped so maximized windows keep compact segments.
 pub fn footer_gauge_row(
     ui: &mut Ui,
     cpu: (f32, f32),
@@ -190,10 +194,13 @@ pub fn footer_gauge_row(
     let avail = ui.available_width();
     let gutter = 14.0;
     let n = 4.0;
-    let col_w = ((avail - gutter * (n - 1.0)) / n).max(72.0);
+    let col_w = ((avail - gutter * (n - 1.0)) / n).clamp(96.0, 168.0);
+    let strip_w = col_w * n + gutter * (n - 1.0);
+    let pad = ((avail - strip_w) * 0.5).max(0.0);
 
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = gutter;
+        ui.add_space(pad);
         led_gauge(ui, "CPU", cpu.0, cpu.1, col_w);
         led_gauge(ui, "RAM", ram.0, ram.1, col_w);
         led_gauge(ui, "DISK", disk.0, disk.1, col_w);
@@ -439,20 +446,31 @@ pub fn controls_toggle(ui: &mut Ui, open: bool) -> bool {
 }
 
 pub fn status_chip(ui: &mut Ui, text: impl Into<String>, color: Color32) -> egui::Response {
-    egui::Frame::NONE
-        .fill(color.gamma_multiply(0.15))
-        .corner_radius(RADIUS_SM)
-        .inner_margin(egui::Margin::symmetric(12, 5))
-        .stroke(Stroke::new(1.0, color.gamma_multiply(0.4)))
-        .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new(text.into())
-                    .size(12.0)
-                    .strong()
-                    .color(color),
-            );
-        })
-        .response
+    let text = text.into();
+    // Intrinsic size — parent `vertical_centered` / leftover height must not stretch chips.
+    let font = FontId::proportional(12.0);
+    let galley = ui.fonts(|f| f.layout_no_wrap(text.clone(), font.clone(), color));
+    let pad_x = 12.0;
+    let pad_y = 5.0;
+    let size = Vec2::new(
+        (galley.size().x + pad_x * 2.0).ceil(),
+        (galley.size().y + pad_y * 2.0).ceil().max(24.0),
+    );
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        RADIUS_SM,
+        color.gamma_multiply(0.15),
+        Stroke::new(1.0, color.gamma_multiply(0.4)),
+        StrokeKind::Inside,
+    );
+    painter.galley(
+        Pos2::new(rect.left() + pad_x, rect.center().y - galley.size().y * 0.5),
+        galley,
+        color,
+    );
+    resp
 }
 
 #[allow(dead_code)] // kept for future interactive profiles

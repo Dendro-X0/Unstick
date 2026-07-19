@@ -357,37 +357,65 @@ impl ThrottleExecutor {
         self.resume_pids(&pids, reason)
     }
 
-    pub fn restore_all(&mut self) {
+    pub fn restore_all(&mut self) -> Vec<(u32, String, bool)> {
         self.clear_boost();
         let _ = self.resume_all_suspended("restore_all");
-        let pids: Vec<u32> = self.applied.keys().copied().collect();
-        for pid in pids {
+        let soft: Vec<u32> = self
+            .applied
+            .keys()
+            .copied()
+            .filter(|p| !self.ledger.contains(*p))
+            .collect();
+        let mut out = Vec::new();
+        for pid in soft {
+            let ok = self.restore_pid(pid).is_ok();
+            if !ok {
+                self.applied.remove(&pid);
+            }
+            out.push((pid, "restore_all".to_string(), ok));
+        }
+        let leftover: Vec<u32> = self.applied.keys().copied().collect();
+        for pid in leftover {
             let _ = self.restore_pid(pid);
         }
         self.applied.clear();
         self.persist_ledger();
+        out
     }
 
     /// Restore soft demotions (EcoQoS / mem-prio / priority) for PIDs no longer in the plan.
     /// Suspended PIDs stay on the suspend ledger until explicit resume.
-    pub fn restore_not_in_plan(&mut self, plan_pids: &std::collections::HashSet<u32>) {
+    /// Returns `(pid, reason, restore_ok)` for each soft demotion removed from tracking.
+    pub fn restore_not_in_plan(
+        &mut self,
+        plan_pids: &std::collections::HashSet<u32>,
+    ) -> Vec<(u32, String, bool)> {
         let stale: Vec<u32> = self
             .applied
             .keys()
             .copied()
             .filter(|p| !plan_pids.contains(p) && !self.ledger.contains(*p))
             .collect();
+        let mut out = Vec::new();
         for pid in stale {
             match self.restore_pid(pid) {
-                Ok(()) => debug!(pid, "restored soft demotion (left plan)"),
-                Err(e) => warn!(pid, error = %e, "soft restore failed — will retry"),
+                Ok(()) => {
+                    debug!(pid, "restored soft demotion (left plan)");
+                    out.push((pid, "left_plan".to_string(), true));
+                }
+                Err(e) => {
+                    warn!(pid, error = %e, "soft restore failed — will retry");
+                    // Leave in `applied` for retry (unlike TTL path).
+                }
             }
         }
+        out
     }
 
     /// Force-restore soft demotions that exceeded TTL even if still in the plan.
     /// Creates recovery windows so demotions cannot linger indefinitely.
-    pub fn expire_soft_demotions(&mut self) -> Vec<(u32, String)> {
+    /// Returns `(pid, reason, restore_ok)` — tracking is always cleared.
+    pub fn expire_soft_demotions(&mut self) -> Vec<(u32, String, bool)> {
         let max = self.max_soft_demote_secs;
         let expired: Vec<u32> = self
             .applied
@@ -402,14 +430,14 @@ impl ThrottleExecutor {
             match self.restore_pid(pid) {
                 Ok(()) => {
                     debug!(pid, max_secs = max, "soft demotion TTL expired — restored");
-                    out.push((pid, "soft_demote_ttl".to_string()));
+                    out.push((pid, "soft_demote_ttl".to_string(), true));
                 }
                 Err(e) => {
                     // Drop tracking even if OpenProcess fails (exited PID) so demotion
                     // state cannot linger indefinitely in the executor.
                     self.applied.remove(&pid);
                     warn!(pid, error = %e, "soft TTL restore failed — cleared tracking");
-                    out.push((pid, "soft_demote_ttl".to_string()));
+                    out.push((pid, "soft_demote_ttl".to_string(), false));
                 }
             }
         }

@@ -8,7 +8,7 @@
 **Parent:** [roadmap-future.md](roadmap-future.md)
 
 ```
-HANDOFF ATOMIC STEP: v0.6 I5 Done — shipped 0.6.0; next v0.7 UX/ops or Authenticode when cert
+HANDOFF ATOMIC STEP: v0.6 I5 Done — shipped 0.6.0; next [v0.7 U0](roadmap-v0.7.0.md)
 PAUSED / CANCELLED:    Suspend-as-default; timer-res; Idle without streak/TTL; zero-stutter claims
 ```
 

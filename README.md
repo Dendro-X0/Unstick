@@ -2,7 +2,7 @@
 # https://github.com/Dendro-X0/Unstick
 
 **Windows-only** portable Guard that protects the OS drive (SSD/HDD) and RAM under pressure — freeze mitigation + load/thermal relief.  
-**Current:** **v0.6.0** ([release notes](docs/RELEASE-v0.6.0.md), unsigned zip) — Efficiency Idle under sustained cliff · [Idle-under-stress](specs/backend/idle-under-stress-design.md). Prior: v0.5 north-star · v0.4 closed-loop.
+**Current:** **v0.7.0** ([release notes](docs/RELEASE-v0.7.0.md), unsigned zip) — session actions, profiles, tray badge · [roadmap](docs/roadmap-v0.7.0.md). Prior: v0.6 Efficiency Idle · v0.5 north-star.
 
 See: [specs/backend/guardian-design.md](specs/backend/guardian-design.md) · [docs/USER-GUIDE.md](docs/USER-GUIDE.md) · [docs/roadmap-next-release.md](docs/roadmap-next-release.md) · [docs/roadmap-future.md](docs/roadmap-future.md)
 

@@ -1,9 +1,9 @@
 # Unstick — next release roadmap
 
-**Shipped Latest:** **`v0.6.0`** ([notes](RELEASE-v0.6.0.md), unsigned zip) — Idle-under-stress Efficiency Mode  
-**Forward plan:** **[roadmap-future.md](roadmap-future.md)** (0.7 → 1.0; Authenticode parallel)  
+**Shipped Latest:** **`v0.7.0`** ([notes](RELEASE-v0.7.0.md), unsigned zip) — UX/ops (session actions, profiles, tray, tools)  
+**Forward plan:** **[roadmap-future.md](roadmap-future.md)** (1.0; Authenticode parallel)  
 **Product scope:** Windows-only OS-disk / RAM / thermal-power **hardware control** — freeze mitigation + load/thermal **relief**, not a general performance suite.  
-**Design:** [idle-under-stress-design.md](../specs/backend/idle-under-stress-design.md) · [hardware-control-north-star.md](../specs/backend/hardware-control-north-star.md)
+**Design:** [guard-profiles-design.md](../specs/backend/guard-profiles-design.md) · [idle-under-stress-design.md](../specs/backend/idle-under-stress-design.md) · [hardware-control-north-star.md](../specs/backend/hardware-control-north-star.md)
 
 ```mermaid
 flowchart LR
@@ -17,16 +17,16 @@ flowchart LR
 
 ---
 
-## Next: v0.7.0 — UX & ops
+## Next: v1.0.0 — Public stable
 
-**Detail:** [roadmap-future.md](roadmap-future.md) § v0.7.0
+**Detail:** [roadmap-future.md](roadmap-future.md) § v1.0.0
 
 | Work | Status |
 |------|--------|
-| Session actions summary | Pending |
-| Gaming / Dev / Quiet profiles | Pending |
-| Tray pressure + capping badge | Pending |
-| Authenticode when cert | Blocker — [signing-blocker.md](signing-blocker.md) |
+| Authenticode signed Latest | Blocker — [signing-blocker.md](signing-blocker.md) |
+| L3 soak on ≥2 machine classes | Partial (WD Green done) |
+| Hang-free Soft path (TTL proven) | Soft restore proven on WD Green Run 2 |
+| Claims frozen | Freeze mitigation + load/thermal relief only |
 
 ---
 
@@ -34,6 +34,7 @@ flowchart LR
 
 | Version | Notes |
 |---------|--------|
+| **0.7.0** | [RELEASE](RELEASE-v0.7.0.md) · [roadmap](roadmap-v0.7.0.md) — session actions, profiles, tray, tools |
 | **0.6.0** | [RELEASE](RELEASE-v0.6.0.md) · [roadmap](roadmap-v0.6.0.md) — Efficiency Idle i3; L3 Run 2 |
 | **0.5.1** | [roadmap](roadmap-v0.5.1.md) — soak evidence + signing blocker (trust band) |
 | **0.5.0** | [RELEASE](RELEASE-v0.5.0.md) — hardware-control north-star |

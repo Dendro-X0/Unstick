@@ -9,7 +9,9 @@ mod client;
 use std::time::Duration;
 
 use anyhow::Result;
-use guardian_core::{status_path, ClientRequest, PressureBand, ServerPush, StatusSnapshot};
+use guardian_core::{
+    status_path, ClientRequest, DiskControlMode, PressureBand, ServerPush, StatusSnapshot,
+};
 use tracing_subscriber::EnvFilter;
 
 #[cfg(windows)]
@@ -83,8 +85,9 @@ fn print_status(s: &StatusSnapshot) {
         PressureBand::Throttle => "throttle",
         PressureBand::Emergency => "emergency",
     };
+    let ctrl = tray_control_summary(s);
     println!(
-        "[{}] score={:.2} cpu={:.0}% mem_avail={:.1}GB disk={:.0}% queue={:.1} paused={} uptime={}s",
+        "[{}] score={:.2} cpu={:.0}% mem_avail={:.1}GB disk={:.0}% queue={:.1} ctrl={ctrl} paused={} uptime={}s",
         band,
         s.pressure_score,
         s.cpu_percent,
@@ -109,6 +112,71 @@ fn print_status(s: &StatusSnapshot) {
     println!();
 }
 
+/// Live Soft control phrase for tray tooltip / CLI (not session totals).
+fn tray_control_summary(s: &StatusSnapshot) -> String {
+    if s.paused {
+        return "paused".into();
+    }
+    let mut parts = Vec::new();
+    for (label, mode, intensity) in [
+        ("disk", s.disk_control_mode, s.disk_control_intensity),
+        ("ram", s.mem_control_mode, s.mem_control_intensity),
+    ] {
+        match mode {
+            DiskControlMode::Released => {}
+            DiskControlMode::Holding => parts.push(format!("{label} hold i{intensity}")),
+            DiskControlMode::Capping if intensity >= 3 => {
+                parts.push(format!("{label} idle i{intensity}"))
+            }
+            DiskControlMode::Capping => parts.push(format!("{label} cap i{intensity}")),
+        }
+    }
+    if parts.is_empty() {
+        "monitoring".into()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrayIconTone {
+    Calm,
+    Warn,
+    Cap,
+    Idle,
+    Paused,
+    Offline,
+}
+
+fn tray_icon_tone(s: Option<&StatusSnapshot>) -> TrayIconTone {
+    let Some(s) = s else {
+        return TrayIconTone::Offline;
+    };
+    if s.paused {
+        return TrayIconTone::Paused;
+    }
+    let max_i = s.disk_control_intensity.max(s.mem_control_intensity);
+    let capping = s.disk_control_mode == DiskControlMode::Capping
+        || s.mem_control_mode == DiskControlMode::Capping;
+    let holding = s.disk_control_mode == DiskControlMode::Holding
+        || s.mem_control_mode == DiskControlMode::Holding;
+    if capping && max_i >= 3 {
+        return TrayIconTone::Idle;
+    }
+    if capping
+        || matches!(
+            s.pressure_band,
+            PressureBand::Throttle | PressureBand::Emergency
+        )
+    {
+        return TrayIconTone::Cap;
+    }
+    if holding || matches!(s.pressure_band, PressureBand::Warn) {
+        return TrayIconTone::Warn;
+    }
+    TrayIconTone::Calm
+}
+
 #[cfg(windows)]
 async fn run_tray() -> Result<()> {
     use std::sync::{Arc, Mutex};
@@ -131,7 +199,7 @@ async fn run_tray() -> Result<()> {
     menu.append(&open_log_item)?;
     menu.append(&quit_item)?;
 
-    let icon = Icon::from_rgba(make_icon_rgba(32), 32, 32)?;
+    let icon = Icon::from_rgba(make_icon_rgba(32, TrayIconTone::Calm), 32, 32)?;
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_tooltip("Unstick")
@@ -173,6 +241,7 @@ async fn run_tray() -> Result<()> {
     let menu_channel = MenuEvent::receiver();
     let mut prev_disk_hard = false;
     let mut prev_mem_hard = false;
+    let mut prev_tone = TrayIconTone::Calm;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::WaitUntil(
@@ -206,22 +275,27 @@ async fn run_tray() -> Result<()> {
             }
         }
 
-        if let Some(s) = last_status.lock().ok().and_then(|g| g.clone()) {
+        let snap = last_status.lock().ok().and_then(|g| g.clone());
+        let tone = tray_icon_tone(snap.as_ref());
+        if tone != prev_tone {
+            if let Ok(icon) = Icon::from_rgba(make_icon_rgba(32, tone), 32, 32) {
+                let _ = tray.set_icon(Some(icon));
+            }
+            prev_tone = tone;
+        }
+
+        if let Some(s) = snap {
             let band = s.pressure_band.as_str();
+            let ctrl = tray_control_summary(&s);
             let tip = format!(
-                "Unstick [{band}] score={:.2} cpu={:.0}% disk={} mem={}",
+                "Unstick [{band}] · {ctrl}\nscore={:.2} · cpu={:.0}% · disk lock={} · mem lock={}",
                 s.pressure_score,
                 s.cpu_percent,
                 s.disk_lock.as_str(),
                 s.mem_lock.as_str()
             );
             let _ = tray.set_tooltip(Some(tip));
-            status_item.set_text(format!(
-                "[{band}] cpu={:.0}% disk={} mem={}",
-                s.cpu_percent,
-                s.disk_lock.as_str(),
-                s.mem_lock.as_str()
-            ));
+            status_item.set_text(format!("[{band}] {ctrl} · cpu={:.0}%", s.cpu_percent));
 
             // P3-1: toast when Disk/Mem Lock enters HARD.
             use guardian_core::{DiskLockMode, MemLockMode};
@@ -243,6 +317,9 @@ async fn run_tray() -> Result<()> {
             }
             prev_disk_hard = disk_hard;
             prev_mem_hard = mem_hard;
+        } else {
+            let _ = tray.set_tooltip(Some("Unstick · waiting for service".to_string()));
+            status_item.set_text("Status: waiting for service…");
         }
 
         if let Event::NewEvents(_) = &event {
@@ -252,26 +329,84 @@ async fn run_tray() -> Result<()> {
 }
 
 #[cfg(windows)]
-fn make_icon_rgba(size: u32) -> Vec<u8> {
+fn make_icon_rgba(size: u32, tone: TrayIconTone) -> Vec<u8> {
+    let (r, g, b) = match tone {
+        TrayIconTone::Calm => (20, 160, 140),    // teal
+        TrayIconTone::Warn => (230, 141, 80),    // amber
+        TrayIconTone::Cap => (220, 80, 80),      // coral — actively capping
+        TrayIconTone::Idle => (180, 60, 120),    // magenta — Efficiency Idle
+        TrayIconTone::Paused => (110, 120, 130), // slate
+        TrayIconTone::Offline => (70, 75, 80),   // dim
+    };
     let mut rgba = vec![0u8; (size * size * 4) as usize];
     for y in 0..size {
         for x in 0..size {
             let i = ((y * size + x) * 4) as usize;
-            // Simple teal shield glyph
             let cx = size as f32 / 2.0;
             let cy = size as f32 / 2.0;
             let dx = x as f32 - cx;
             let dy = y as f32 - cy;
             let inside = dx.abs() < cx * 0.55 && dy.abs() < cy * 0.7;
             if inside {
-                rgba[i] = 20;
-                rgba[i + 1] = 160;
-                rgba[i + 2] = 140;
+                rgba[i] = r;
+                rgba[i + 1] = g;
+                rgba[i + 2] = b;
                 rgba[i + 3] = 255;
             } else {
                 rgba[i + 3] = 0;
             }
         }
     }
+    // Small corner pip for capping / idle so badge reads without opening UI.
+    if matches!(tone, TrayIconTone::Cap | TrayIconTone::Idle) {
+        let pip = (size * 3 / 4)..size;
+        for y in pip.clone() {
+            for x in pip.clone() {
+                let i = ((y * size + x) * 4) as usize;
+                rgba[i] = 255;
+                rgba[i + 1] = 255;
+                rgba[i + 2] = 255;
+                rgba[i + 3] = 255;
+            }
+        }
+    }
     rgba
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use guardian_core::DiskControlMode;
+
+    fn blank_status() -> StatusSnapshot {
+        serde_json::from_str(
+            r#"{"paused":false,"pressure_score":0.1,"pressure_band":"normal","cpu_percent":1.0,"memory_available_bytes":1,"memory_total_bytes":2,"disk_busy_percent":1.0,"disk_queue_length":0.0,"top_processes":[],"recent_throttles":[],"recent_abuse":[],"service_uptime_secs":1}"#,
+        )
+        .expect("minimal status")
+    }
+
+    #[test]
+    fn control_summary_capping_and_idle() {
+        let mut s = blank_status();
+        assert_eq!(tray_control_summary(&s), "monitoring");
+        s.disk_control_mode = DiskControlMode::Capping;
+        s.disk_control_intensity = 2;
+        assert_eq!(tray_control_summary(&s), "disk cap i2");
+        s.disk_control_intensity = 3;
+        assert_eq!(tray_control_summary(&s), "disk idle i3");
+        s.paused = true;
+        assert_eq!(tray_control_summary(&s), "paused");
+    }
+
+    #[test]
+    fn icon_tone_follows_control() {
+        let mut s = blank_status();
+        assert_eq!(tray_icon_tone(Some(&s)), TrayIconTone::Calm);
+        s.disk_control_mode = DiskControlMode::Capping;
+        s.disk_control_intensity = 2;
+        assert_eq!(tray_icon_tone(Some(&s)), TrayIconTone::Cap);
+        s.disk_control_intensity = 3;
+        assert_eq!(tray_icon_tone(Some(&s)), TrayIconTone::Idle);
+        assert_eq!(tray_icon_tone(None), TrayIconTone::Offline);
+    }
 }

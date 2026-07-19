@@ -27,6 +27,14 @@ pub enum ClientRequest {
     SetDiskSafeThresholds { soft_pct: f32, hard_pct: f32 },
     /// User safe RAM available %: soft = WS trim; hard = deeper trim / optional Suspend.
     SetMemSafeThresholds { soft_pct: f32, hard_pct: f32 },
+    /// Apply Soft policy skin: `dev` | `gaming` | `quiet`.
+    SetProfile { profile: String },
+    /// Write config JSON to AppData exports\unstick-config.json.
+    ExportConfig,
+    /// Load config JSON from imports\ or exports\unstick-config.json.
+    ImportConfig,
+    /// Opt-in short disk_hog prove soak (512 MiB × 90s) if disk-hog.exe is beside the service.
+    StartProveDiskHog,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,6 +176,24 @@ pub struct StatusSnapshot {
     /// Processes resumed from durable ledger at service start (this session).
     #[serde(default)]
     pub recovered_suspends: u32,
+    /// Soft capped applies this service session (disk/mem control or lock reasons).
+    #[serde(default)]
+    pub session_capped: u32,
+    /// Subset of capped with Efficiency Idle reason.
+    #[serde(default)]
+    pub session_efficiency_idle: u32,
+    /// Soft demotions restored (left-plan or Soft TTL) this session.
+    #[serde(default)]
+    pub session_restored: u32,
+    /// Experimental Suspend applies this session.
+    #[serde(default)]
+    pub session_suspended: u32,
+    /// Experimental Suspend resumes this session (excludes soft_restore).
+    #[serde(default)]
+    pub session_resumed: u32,
+    /// Last applied Guard profile (`dev` | `gaming` | `quiet`).
+    #[serde(default = "crate::profiles::default_active_profile")]
+    pub active_profile: String,
 }
 
 fn default_true() -> bool {

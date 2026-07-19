@@ -35,6 +35,7 @@
 ```
 
 - Window: ~920×640, resizable, min 780×520
+- **Wide / maximized:** nav tabs cap ~148px and center; footer gauges cap ~168px/col and center; status chips use intrinsic height (do not stretch with leftover vertical space from `vertical_centered`)
 - Chrome icon glyph: **U** (not FG)
 - Brand row: **UNSTICK** + dim version only (no competing tagline in the brand row)
 
@@ -73,7 +74,7 @@ Contents:
 2. Mode: **Soft only** (default); **Last-resort pause** only if `experimental_suspend`
 3. Suspended count chip (rarely non-zero on Soft-only path)
 4. Safety / recovered / elevation banners (only when non-empty)
-5. **Hardware control** readout: envelope calibrated/learning, `u_disk` / `u_mem`, setpoint band, mode + intensity
+5. **Hardware control** readout: envelope calibrated/learning, `u_disk` / `u_mem`, setpoint band, mode + intensity; session actions line; **Profile · Dev | Gaming | Quiet** (`SetProfile`); **Tools** Export / Import config + Prove Soft (90s)
 6. **Advanced thresholds ▸** (collapsed): Soft/Hard disk Active Time % and RAM available % sliders + Apply + presets
 
 Hero also shows **Focus · app.exe** when the service reports a foreground process (LIVE only).
@@ -87,7 +88,7 @@ Hero also shows **Focus · app.exe** when the service reports a foreground proce
 
 | Tab | Purpose | Data |
 |-----|---------|------|
-| Guard | Arm/disarm protection; primary CTA + collapsed controls | status + Pause/Resume + SetCriticalGuard + SetCriticalGuardMode + SetDiskSafeThresholds |
+| Guard | Arm/disarm protection; primary CTA + collapsed controls | status + Pause/Resume + SetCriticalGuard + SetCriticalGuardMode + SetDiskSafeThresholds + SetProfile |
 | Monitor | Top processes, sparklines, event log | status + `Events { limit }` / events.jsonl |
 | Whitelist | Never-throttle / never-suspend entries | AddWhitelist / RemoveWhitelist |
 | Protect | Abuse/miner alert summary + trust actions | recent_abuse + TrustPid |
@@ -103,6 +104,7 @@ See what is consuming the machine.
 3. Suspended list (if any)
 4. Scrollable top-process rows: cpu%, pid, name, mem, Whitelist action
 5. **Event log** — last ~40 from session / `events.jsonl` (throttle, suspend, resume, info)
+6. **Session actions line** (v0.7) — above Event log: `This session · capped N · idle M · restored K` from `status.session_*` (see [session-actions-summary-design.md](../specs/backend/session-actions-summary-design.md)). Not in Guard hero. Hover explains Soft actuators only — not freezes prevented.
 
 ## Page: Whitelist
 
@@ -140,7 +142,7 @@ Segmented LED-style bars (teal). Amber/coral fill when >70% / >85%.
 
 | UI action | IPC |
 |-----------|-----|
-| Refresh (1s timer) | `GetStatus` + `Events { limit: 40 }` or status.json / events.jsonl |
+| Refresh (1s timer) | `GetStatus` + `Events { limit: 40 }` or status.json / events.jsonl — bind `session_capped` / `session_efficiency_idle` / `session_restored` (+ suspend/resume) |
 | CTA pause | `Pause { minutes: 15 }` |
 | CTA resume | `Resume` |
 | Trust | `TrustPid` |

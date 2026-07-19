@@ -7,14 +7,15 @@ use anyhow::Result;
 use chrono::Utc;
 use guardian_core::{
     classify_dpc_isr, classify_focus_profile, dpc_advisory_message, dpc_isr_raw_level,
-    events_path, load_config, recent_events_for_client, save_config, score_pressure_tracked,
-    status_path, thermal_advisory_message, thermal_power_stress, ActionPlan, ApplyDeniedSummary,
-    ClientRequest, CriticalGuardMode, DiskCalibrator, DiskControlLoop, DiskLockMode,
-    EnvelopeCalibrator, GuardianConfig, GuardianEvent, HysteresisTracker, MemControlLoop,
-    merge_control_actions, paging_pressure_evidence, plan_disk_control_actions,
-    plan_mem_control_actions, MemLockMode, MemLockThresholds, PressureBand, PressureInputs,
-    PressureState, ServerPush, StatusSnapshot, SuspendedSummary, ThrottleLevel, AbuseSummary,
-    ThrottleSummary, plan_qos,
+    events_path, export_config_json, import_config_json, load_config, recent_events_for_client,
+    save_config, score_pressure_tracked, status_path, thermal_advisory_message,
+    thermal_power_stress, ActionPlan, ApplyDeniedSummary, ClientRequest, CriticalGuardMode,
+    DiskCalibrator, DiskControlLoop, DiskLockMode, EnvelopeCalibrator, GuardianConfig,
+    GuardianEvent, HysteresisTracker, MemControlLoop, merge_control_actions,
+    paging_pressure_evidence, plan_disk_control_actions, plan_mem_control_actions, MemLockMode,
+    MemLockThresholds, PressureBand, PressureInputs, PressureState, ServerPush, StatusSnapshot,
+    SuspendedSummary, ThrottleLevel, AbuseSummary, ThrottleSummary, plan_qos,
+    SessionActionCounters, is_soft_restore_reason,
 };
 use guardian_detect::{apply_parent_anomaly, AbuseDetector};
 use guardian_win::{elevation_likely, ThrottleExecutor, WinSensor};
@@ -85,6 +86,8 @@ pub struct ServiceInner {
     pub last_status_write: Option<Instant>,
     /// Rate-limit elevated apply_denied Info events.
     pub last_elev_denied_log: Option<Instant>,
+    /// Soft / Suspend session aggregates since process start (v0.7).
+    pub session_actions: SessionActionCounters,
 }
 
 impl ServiceInner {
@@ -124,6 +127,7 @@ impl ServiceInner {
             last_thermal_advisory_at: None,
             last_status_write: None,
             last_elev_denied_log: None,
+            session_actions: SessionActionCounters::default(),
         })
     }
 
@@ -153,7 +157,9 @@ impl ServiceInner {
                         at: Utc::now(),
                     });
                 }
-                self.throttle.restore_all();
+                let soft = self.throttle.restore_all();
+                let sample = self.last_sample.clone();
+                self.note_soft_restores(&soft, sample.as_ref());
                 self.push_event(GuardianEvent::Info {
                     message: format!("paused for {minutes} minutes"),
                     at: Utc::now(),
@@ -372,15 +378,119 @@ impl ServiceInner {
                     message: format!("RAM safe: soft {soft:.0}% · hard {hard:.0}% avail"),
                 }
             }
+            ClientRequest::SetProfile { profile } => {
+                let result = {
+                    let mut cfg = self.cfg.write().await;
+                    let r = guardian_core::apply_profile(&mut cfg, &profile);
+                    if r.is_ok() {
+                        let _ = save_config(&cfg);
+                    }
+                    r
+                };
+                match result {
+                    Ok(id) => {
+                        self.push_event(GuardianEvent::Info {
+                            message: format!("profile · {id}"),
+                            at: Utc::now(),
+                        });
+                        ServerPush::Ok {
+                            message: format!("profile {id}"),
+                        }
+                    }
+                    Err(message) => ServerPush::Error { message },
+                }
+            }
+            ClientRequest::ExportConfig => {
+                let snapshot = self.cfg.read().await.clone();
+                match export_config_json(&snapshot) {
+                    Ok(path) => {
+                        self.push_event(GuardianEvent::Info {
+                            message: format!("config exported · {}", path.display()),
+                            at: Utc::now(),
+                        });
+                        ServerPush::Ok {
+                            message: format!("exported {}", path.display()),
+                        }
+                    }
+                    Err(e) => ServerPush::Error {
+                        message: format!("export failed: {e}"),
+                    },
+                }
+            }
+            ClientRequest::ImportConfig => match import_config_json() {
+                Ok(new_cfg) => {
+                    {
+                        let mut cfg = self.cfg.write().await;
+                        *cfg = new_cfg;
+                        let _ = save_config(&cfg);
+                    }
+                    self.push_event(GuardianEvent::Info {
+                        message: "config imported".into(),
+                        at: Utc::now(),
+                    });
+                    ServerPush::Ok {
+                        message: "config imported (pause cleared)".into(),
+                    }
+                }
+                Err(message) => ServerPush::Error { message },
+            },
+            ClientRequest::StartProveDiskHog => match start_prove_disk_hog() {
+                Ok(msg) => {
+                    self.push_event(GuardianEvent::Info {
+                        message: msg.clone(),
+                        at: Utc::now(),
+                    });
+                    ServerPush::Ok { message: msg }
+                }
+                Err(message) => ServerPush::Error { message },
+            },
         }
     }
 
     fn push_event(&mut self, ev: GuardianEvent) {
+        match &ev {
+            GuardianEvent::Suspend { .. } => self.session_actions.note_suspend(),
+            GuardianEvent::Resume { reason, .. } if !is_soft_restore_reason(reason) => {
+                self.session_actions.note_hard_resume();
+            }
+            _ => {}
+        }
         append_event_log(&ev);
         self.recent_events.push(ev);
         if self.recent_events.len() > 200 {
             let drain = self.recent_events.len() - 200;
             self.recent_events.drain(0..drain);
+        }
+    }
+
+    fn note_soft_restores(
+        &mut self,
+        items: &[(u32, String, bool)],
+        sample: Option<&guardian_core::SystemSample>,
+    ) {
+        let mut seen = std::collections::HashSet::new();
+        for (pid, reason, ok) in items {
+            if !seen.insert(*pid) {
+                continue;
+            }
+            if !*ok {
+                continue;
+            }
+            self.session_actions.note_soft_restore_ok();
+            let name = sample
+                .and_then(|s| {
+                    s.processes
+                        .iter()
+                        .find(|p| p.pid == *pid)
+                        .map(|p| p.name.clone())
+                })
+                .unwrap_or_default();
+            self.push_event(GuardianEvent::Resume {
+                pid: *pid,
+                name,
+                reason: format!("soft_restore:{reason}"),
+                at: Utc::now(),
+            });
         }
     }
 }
@@ -391,6 +501,70 @@ fn append_event_log(ev: &GuardianEvent) {
         if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
             let _ = writeln!(f, "{raw}");
         }
+    }
+}
+
+/// Opt-in Soft prove soak: 512 MiB × 90s via sibling `disk-hog.exe`.
+fn start_prove_disk_hog() -> Result<String, String> {
+    if prove_hog_running() {
+        return Err("disk-hog already running — wait for it to finish".into());
+    }
+    let exe = find_disk_hog_exe().ok_or_else(|| {
+        "disk-hog.exe not found beside guardian-service (build fixtures/disk_hog --release and copy next to the service)".to_string()
+    })?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new(&exe)
+            .args(["512", "90"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("spawn disk-hog: {e}"))?;
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = exe;
+        return Err("prove disk-hog is Windows-only".into());
+    }
+    Ok(
+        "prove Soft control started · disk-hog 512 MiB × 90s on TEMP (watch Guard capping / session counts)"
+            .into(),
+    )
+}
+
+fn find_disk_hog_exe() -> Option<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(me) = std::env::current_exe() {
+        if let Some(dir) = me.parent() {
+            candidates.push(dir.join("disk-hog.exe"));
+        }
+    }
+    candidates.push(std::path::PathBuf::from(
+        "fixtures/disk_hog/target/release/disk-hog.exe",
+    ));
+    candidates.push(std::path::PathBuf::from(
+        "target/release/disk-hog.exe",
+    ));
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+fn prove_hog_running() -> bool {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("tasklist")
+            .args(["/FI", "IMAGENAME eq disk-hog.exe", "/NH"])
+            .output()
+            .ok()
+            .map(|o| {
+                let s = String::from_utf8_lossy(&o.stdout).to_ascii_lowercase();
+                s.contains("disk-hog.exe")
+            })
+            .unwrap_or(false)
+    }
+    #[cfg(not(windows))]
+    {
+        false
     }
 }
 
@@ -705,7 +879,8 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
         && mem_ctrl.intensity == 0
         && !paused
     {
-        g.throttle.restore_all();
+        let soft = g.throttle.restore_all();
+        g.note_soft_restores(&soft, Some(&sample));
         g.recent_throttles.clear();
         g.apply_denied.clear();
     } else if paused {
@@ -761,6 +936,12 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
                 })
                 .collect();
 
+            for t in &g.recent_throttles {
+                if t.level != ThrottleLevel::Suspend {
+                    g.session_actions.note_throttle_apply(&t.reason);
+                }
+            }
+
             let throttle_events: Vec<GuardianEvent> = g
                 .recent_throttles
                 .iter()
@@ -791,8 +972,9 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
         let plan_pids: std::collections::HashSet<u32> =
             plan.actions.iter().map(|a| a.pid).collect();
         // Soft TTL: force Normal even if still planned — next tick may re-demote under pressure.
-        let _ = g.throttle.expire_soft_demotions();
-        g.throttle.restore_not_in_plan(&plan_pids);
+        let mut soft = g.throttle.expire_soft_demotions();
+        soft.extend(g.throttle.restore_not_in_plan(&plan_pids));
+        g.note_soft_restores(&soft, Some(&sample));
     }
 
     let live: Vec<u32> = sample.processes.iter().map(|p| p.pid).collect();
@@ -893,6 +1075,12 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
         version: guardian_core::VERSION.to_string(),
         apply_denied: g.apply_denied.clone(),
         recovered_suspends: g.recovered_suspends,
+        session_capped: g.session_actions.capped,
+        session_efficiency_idle: g.session_actions.efficiency_idle,
+        session_restored: g.session_actions.restored,
+        session_suspended: g.session_actions.suspended,
+        session_resumed: g.session_actions.resumed,
+        active_profile: cfg.active_profile.clone(),
     };
 
     // Compact JSON; throttle disk write on Normal (IPC always uses last_status).

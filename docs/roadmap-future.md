@@ -1,11 +1,11 @@
 # Unstick — future roadmap (after v0.5.0)
 
-**Current Latest:** [v0.6.0](RELEASE-v0.6.0.md) (unsigned portable)  
+**Current Latest:** [v0.7.0](RELEASE-v0.7.0.md) (unsigned portable)  
 **North-star:** [hardware-control-north-star.md](../specs/backend/hardware-control-north-star.md)  
 **Living index:** [roadmap-next-release.md](roadmap-next-release.md)
 
 ```
-HANDOFF ATOMIC STEP: none — forward after 0.6.0; next v0.7 UX/ops or Authenticode
+HANDOFF ATOMIC STEP: none — forward after 0.7.0; next Authenticode or v1.0 gates
 PAUSED / CANCELLED:    Suspend-as-primary; overclocking; standby purge; DPC “fixes”; other-OS; damage claims; zero-stutter claims
 CANONICAL OWNER:       docs + product direction
 PROOF BEFORE DONE:     Each version names L1–L3 proof before “shipped”
@@ -70,6 +70,8 @@ flowchart LR
 
 ## v0.7.0 — UX & ops (operator clarity)
 
+**Detail:** [roadmap-v0.7.0.md](roadmap-v0.7.0.md)
+
 **Goal:** Users understand *what Guard did* and can run it as a daily tool.
 
 | Work | Why |
@@ -118,4 +120,4 @@ Prefer the **smallest** item that raises either:
 - **Control quality** (better soft demotion under real freeze cliffs), or  
 - **Operator clarity** (sensing vs capping already done — next is action history / profiles)
 
-Default next after 0.6.0: **v0.7 UX/ops** (action history, profiles, tray badges) and Authenticode when a cert exists; do not claim zero launch stutter.
+Default next after 0.7.0: **Authenticode** when a cert exists, then **v1.0** gates (signed Latest + multi-machine soak + frozen claims); do not claim zero launch stutter.

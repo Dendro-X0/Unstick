@@ -47,4 +47,4 @@ pwsh -File scripts/Package-Portable.ps1
 ## Next
 
 - Authenticode-signed public Latest when cert exists ([signing-blocker.md](signing-blocker.md))  
-- v0.7 UX/ops — action history, profiles, tray badges ([roadmap-future.md](roadmap-future.md))  
+- v0.7 UX/ops — **shipped** [RELEASE-v0.7.0.md](RELEASE-v0.7.0.md)  

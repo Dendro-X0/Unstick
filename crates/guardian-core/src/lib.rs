@@ -9,7 +9,9 @@ mod ipc;
 mod advisory;
 mod policy;
 mod pressure;
+mod profiles;
 mod qos;
+mod session_actions;
 mod suspend_persist;
 mod types;
 
@@ -18,8 +20,9 @@ pub use advisory::{
     thermal_advisory_message, CoolingMode, DpcAdvisoryLevel, ThermalLevel, ThermalPowerInputs,
 };
 pub use config::{
-    CriticalGuardMode, GuardianConfig, load_config, save_config, config_dir, events_path,
-    status_path,
+    CriticalGuardMode, GuardianConfig, config_dir, config_export_path, config_import_path,
+    config_path, events_path, export_config_json, import_config_json, import_config_json_from,
+    load_config, save_config, status_path,
 };
 pub use control::{
     merge_control_actions, merge_disk_control, plan_disk_control_actions, plan_mem_control_actions,
@@ -44,11 +47,19 @@ pub use pressure::{
     update_mem_lock_streaks, DiskLockMode, DiskLockThresholds, HysteresisTracker, MemLockMode,
     MemLockThresholds, PressureBand, PressureInputs, PressureState, StallFractions,
 };
+pub use profiles::{
+    apply_profile, default_active_profile, normalize_profile_id, PROFILE_DEV, PROFILE_GAMING,
+    PROFILE_QUIET,
+};
 pub use suspend_persist::{
     build_persist_file, clear_suspend_ledger, ledger_is_stale, load_suspend_ledger,
     save_suspend_ledger, suspend_ledger_path, PersistedSuspendEntry, PersistedSuspendFile,
 };
 pub use qos::{plan_qos, NapPolicy, QosClass, QosPlan};
+pub use session_actions::{
+    is_efficiency_idle_reason, is_session_capped_reason, is_soft_restore_reason,
+    SessionActionCounters,
+};
 pub use types::{FocusProfile, GuardianEvent, ProcessSample, SystemSample, ThrottleLevel};
 
 pub const APP_NAME: &str = "Unstick";
