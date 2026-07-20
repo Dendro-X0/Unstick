@@ -15,7 +15,7 @@ cargo test -p guardian-core -p guardian-detect
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "==> cargo build --release (service, ui, tray)"
-cargo build --release -p guardian-service -p guardian-ui -p guardian-tray
+cargo build --release -p guardian-service -p guardian-ui -p guardian-tray -p unstick-updater
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "==> fake-miner fixture"

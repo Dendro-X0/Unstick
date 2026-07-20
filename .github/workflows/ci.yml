@@ -26,8 +26,8 @@ jobs:
       - name: Unit tests (core + detect)
         run: cargo test -p guardian-core -p guardian-detect
 
-      - name: Release build (service + ui + tray)
-        run: cargo build --release -p guardian-service -p guardian-ui -p guardian-tray
+      - name: Release build (service + ui + tray + updater)
+        run: cargo build --release -p guardian-service -p guardian-ui -p guardian-tray -p unstick-updater
 
       - name: Build L4 fake-miner fixture
         run: cargo build --release --manifest-path fixtures/fake_miner/Cargo.toml
