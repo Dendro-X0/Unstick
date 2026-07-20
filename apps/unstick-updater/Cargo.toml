@@ -1,0 +1,13 @@
+[package]
+name = "unstick-updater"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "unstick-updater"
+path = "src/main.rs"
+
+[dependencies]
+guardian-core = { workspace = true }
+zip = { version = "2", default-features = false, features = ["deflate"] }

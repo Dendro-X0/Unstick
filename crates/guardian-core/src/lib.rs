@@ -14,6 +14,7 @@ mod qos;
 mod session_actions;
 mod suspend_persist;
 mod types;
+mod update;
 
 pub use advisory::{
     classify_dpc_isr, classify_thermal_power, dpc_advisory_message, dpc_isr_raw_level,
@@ -22,7 +23,7 @@ pub use advisory::{
 pub use config::{
     CriticalGuardMode, GuardianConfig, config_dir, config_export_path, config_import_path,
     config_path, events_path, export_config_json, import_config_json, import_config_json_from,
-    load_config, save_config, status_path,
+    load_config, save_config, status_path, updates_dir,
 };
 pub use control::{
     merge_control_actions, merge_disk_control, plan_disk_control_actions, plan_mem_control_actions,
@@ -61,9 +62,15 @@ pub use session_actions::{
     SessionActionCounters,
 };
 pub use types::{FocusProfile, GuardianEvent, ProcessSample, SystemSample, ThrottleLevel};
+pub use update::{
+    cmp_semver, digest_for_file, is_allowed_update_member, is_newer, normalize_version,
+    parse_latest_release_json, sha256_hex, verify_sha256, zip_asset_name, ReleaseInfo, UpdateState,
+    UPDATE_API_LATEST, UPDATE_OWNER, UPDATE_REPO,
+};
 
 pub const APP_NAME: &str = "Unstick";
 pub const SERVICE_BIN: &str = "guardian-service";
 pub const TRAY_BIN: &str = "guardian-tray";
+pub const UPDATER_BIN: &str = "unstick-updater";
 /// Workspace package version (e.g. 0.1.0).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

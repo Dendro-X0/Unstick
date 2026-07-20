@@ -19,6 +19,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
+ureq = { version = "2.12", default-features = true }
 dirs = { workspace = true }
 chrono = { workspace = true }
 

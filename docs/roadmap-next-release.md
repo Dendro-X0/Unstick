@@ -1,9 +1,9 @@
 # Unstick — next release roadmap
 
-**Shipped Latest:** **`v0.7.0`** ([notes](RELEASE-v0.7.0.md), unsigned zip) — UX/ops (session actions, profiles, tray, tools)  
+**Shipped Latest:** **`v0.8.0`** ([notes](RELEASE-v0.8.0.md), unsigned zip) — in-app update check + install  
 **Forward plan:** **[roadmap-future.md](roadmap-future.md)** (1.0; Authenticode parallel)  
 **Product scope:** Windows-only OS-disk / RAM / thermal-power **hardware control** — freeze mitigation + load/thermal **relief**, not a general performance suite.  
-**Design:** [guard-profiles-design.md](../specs/backend/guard-profiles-design.md) · [idle-under-stress-design.md](../specs/backend/idle-under-stress-design.md) · [hardware-control-north-star.md](../specs/backend/hardware-control-north-star.md)
+**Design:** [in-app-update-design.md](../specs/backend/in-app-update-design.md) · [guard-profiles-design.md](../specs/backend/guard-profiles-design.md) · [hardware-control-north-star.md](../specs/backend/hardware-control-north-star.md)
 
 ```mermaid
 flowchart LR
@@ -11,8 +11,9 @@ flowchart LR
   v051[v0.5.1 Trust_proof]
   v06[v0.6.0 Control_depth]
   v07[v0.7.0 UX_ops]
+  v08[v0.8.0 Updates]
   v10[v1.0.0 Public_stable]
-  v05 --> v051 --> v06 --> v07 --> v10
+  v05 --> v051 --> v06 --> v07 --> v08 --> v10
 ```
 
 ---
@@ -34,6 +35,7 @@ flowchart LR
 
 | Version | Notes |
 |---------|--------|
+| **0.8.0** | [RELEASE](RELEASE-v0.8.0.md) · [roadmap](roadmap-v0.8.0.md) — in-app check + install |
 | **0.7.0** | [RELEASE](RELEASE-v0.7.0.md) · [roadmap](roadmap-v0.7.0.md) — session actions, profiles, tray, tools |
 | **0.6.0** | [RELEASE](RELEASE-v0.6.0.md) · [roadmap](roadmap-v0.6.0.md) — Efficiency Idle i3; L3 Run 2 |
 | **0.5.1** | [roadmap](roadmap-v0.5.1.md) — soak evidence + signing blocker (trust band) |
@@ -47,6 +49,7 @@ flowchart LR
 - Claiming hardware-damage prevention (overload = **relief** only)  
 - Overclocking / GPU boost / general PC-optimizer suite  
 - Suspend as default product path  
+- Silent auto-replace without user confirm (0.8+)
 
 ---
 

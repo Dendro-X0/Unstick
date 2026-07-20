@@ -47,5 +47,6 @@ powershell -File scripts/Package-Portable.ps1
 
 ## Next
 
+- In-app updates — **shipped in [v0.8.0](RELEASE-v0.8.0.md)**  
 - Authenticode-signed public Latest when cert exists ([signing-blocker.md](signing-blocker.md))  
 - v1.0 gate: signed zip + soak on ≥2 machine classes + hang-free Soft path ([roadmap-future.md](roadmap-future.md))  

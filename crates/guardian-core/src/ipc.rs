@@ -7,6 +7,7 @@ use crate::envelope::EnvelopeSnapshot;
 use crate::pressure::{DiskLockMode, MemLockMode, PressureBand};
 use crate::qos::{NapPolicy, QosClass};
 use crate::types::{FocusProfile, GuardianEvent, ProcessSample, ThrottleLevel};
+use crate::update::UpdateState;
 
 pub const PIPE_NAME: &str = r"\\.\pipe\unstick";
 
@@ -35,6 +36,10 @@ pub enum ClientRequest {
     ImportConfig,
     /// Opt-in short disk_hog prove soak (512 MiB × 90s) if disk-hog.exe is beside the service.
     StartProveDiskHog,
+    /// Fetch GitHub Latest and refresh update_* status fields.
+    CheckForUpdate,
+    /// Download + verify + spawn unstick-updater (user-confirmed install).
+    StartUpdate,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,6 +199,21 @@ pub struct StatusSnapshot {
     /// Last applied Guard profile (`dev` | `gaming` | `quiet`).
     #[serde(default = "crate::profiles::default_active_profile")]
     pub active_profile: String,
+    #[serde(default = "default_true")]
+    pub update_check_enabled: bool,
+    #[serde(default)]
+    pub update_available: bool,
+    #[serde(default)]
+    pub update_version: String,
+    #[serde(default)]
+    pub update_notes_url: String,
+    #[serde(default)]
+    pub update_state: UpdateState,
+    #[serde(default)]
+    pub update_error: String,
+    /// True while channel/builds remain unsigned portable.
+    #[serde(default = "default_true")]
+    pub update_unsigned_warning: bool,
 }
 
 fn default_true() -> bool {

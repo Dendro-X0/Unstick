@@ -2,6 +2,8 @@
 /dist/
 /.tmp/
 /Unstick-*-windows-x64.zip
+/Unstick-*-windows-x64.zip.sha256
+/SHA256SUMS
 **/target/
 **/node_modules/
 **/*.pdb

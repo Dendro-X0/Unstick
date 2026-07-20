@@ -191,11 +191,15 @@ async fn run_tray() -> Result<()> {
     let status_item = MenuItem::new("Status: starting...", false, None);
     let pause_item = MenuItem::new("Pause 15 min", true, None);
     let resume_item = MenuItem::new("Resume", true, None);
+    let check_update_item = MenuItem::new("Check for updates", true, None);
+    let install_update_item = MenuItem::new("Install update", true, None);
     let open_log_item = MenuItem::new("Open event log folder", true, None);
     let quit_item = MenuItem::new("Quit tray", true, None);
     menu.append(&status_item)?;
     menu.append(&pause_item)?;
     menu.append(&resume_item)?;
+    menu.append(&check_update_item)?;
+    menu.append(&install_update_item)?;
     menu.append(&open_log_item)?;
     menu.append(&quit_item)?;
 
@@ -211,6 +215,8 @@ async fn run_tray() -> Result<()> {
     let status_item_id = status_item.id().clone();
     let pause_id = pause_item.id().clone();
     let resume_id = resume_item.id().clone();
+    let check_update_id = check_update_item.id().clone();
+    let install_update_id = install_update_item.id().clone();
     let open_id = open_log_item.id().clone();
     let quit_id = quit_item.id().clone();
 
@@ -266,6 +272,22 @@ async fn run_tray() -> Result<()> {
                 if let Some(rt) = rt {
                     let _ = rt.block_on(client::request(ClientRequest::Resume));
                 }
+            } else if id == check_update_id {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .ok();
+                if let Some(rt) = rt {
+                    let _ = rt.block_on(client::request(ClientRequest::CheckForUpdate));
+                }
+            } else if id == install_update_id {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .ok();
+                if let Some(rt) = rt {
+                    let _ = rt.block_on(client::request(ClientRequest::StartUpdate));
+                }
             } else if id == open_id {
                 let _ = open::that(guardian_core::config_dir());
             } else if id == quit_id {
@@ -287,16 +309,27 @@ async fn run_tray() -> Result<()> {
         if let Some(s) = snap {
             let band = s.pressure_band.as_str();
             let ctrl = tray_control_summary(&s);
-            let tip = format!(
-                "Unstick [{band}] · {ctrl}\nscore={:.2} · cpu={:.0}% · disk lock={} · mem lock={}",
-                s.pressure_score,
-                s.cpu_percent,
-                s.disk_lock.as_str(),
-                s.mem_lock.as_str()
-            );
+            let tip = if s.update_available {
+                format!(
+                    "Unstick [{band}] · {ctrl}\nUpdate v{} available · Check tray menu",
+                    s.update_version
+                )
+            } else {
+                format!(
+                    "Unstick [{band}] · {ctrl}\nscore={:.2} · cpu={:.0}% · disk lock={} · mem lock={}",
+                    s.pressure_score,
+                    s.cpu_percent,
+                    s.disk_lock.as_str(),
+                    s.mem_lock.as_str()
+                )
+            };
             let _ = tray.set_tooltip(Some(tip));
             status_item.set_text(format!("[{band}] {ctrl} · cpu={:.0}%", s.cpu_percent));
-
+            install_update_item.set_text(if s.update_available {
+                format!("Install update v{}", s.update_version)
+            } else {
+                "Install update".into()
+            });
             // P3-1: toast when Disk/Mem Lock enters HARD.
             use guardian_core::{DiskLockMode, MemLockMode};
             let disk_hard = s.disk_lock == DiskLockMode::Hard;

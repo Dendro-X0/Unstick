@@ -65,7 +65,18 @@ The UI is **on demand** — it does not need to stay open for protection to work
 
 This is live state only — session capped/restored totals stay on Monitor.
 
-## Updating (portable)
+## Updating
+
+### In-app (recommended)
+
+1. Open Guard → **Controls** → **Updates** → **Check for updates** (or tray **Check for updates**).
+2. When a newer Latest is available, confirm **Install** (unsigned builds show a SmartScreen honesty note).
+3. Unstick downloads the zip, verifies **SHA256**, stops the service/UI, replaces EXEs via `unstick-updater.exe`, and restarts.
+4. Confirm the version chip matches the new release. Config stays in `%LOCALAPPDATA%\Unstick\`.
+
+Requires network access to GitHub Releases (`Dendro-X0/Unstick`). Releases must publish both `Unstick-*-windows-x64.zip` and `SHA256SUMS`.
+
+### Manual (portable fallback)
 
 1. Download the latest `Unstick-*-windows-x64.zip` from the GitHub Release marked **Latest**.
 2. Close the UI and stop `guardian-service` (Task Manager, or run `Uninstall-Autostart.ps1` without `-RemoveData`).
@@ -74,7 +85,7 @@ This is live state only — session capped/restored totals stay on Monitor.
 5. Start `guardian-service.exe`, then `guardian-ui.exe` (or `Install-Autostart.ps1 -StartNow`).
 6. Confirm the version chip in the UI matches the release tag.
 
-There is no in-app auto-updater yet. Public builds should be Authenticode-signed when a signing cert is available; unsigned zips are for private beta only.
+Public builds should be Authenticode-signed when a signing cert is available; unsigned zips are for private beta only.
 
 Service and UI are **Windows GUI-subsystem** binaries — they do not open a console. Logs: `%LOCALAPPDATA%\Unstick\guardian.log*`. For a debug console on the service: set `UNSTICK_CONSOLE=1` before launch.
 

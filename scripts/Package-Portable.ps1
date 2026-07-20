@@ -23,7 +23,7 @@ New-Item -ItemType Directory -Force -Path $env:TMPDIR | Out-Null
 
 if (-not $SkipBuild) {
     Write-Host "Building release binaries..."
-    cargo build --release -p guardian-service -p guardian-tray -p guardian-ui
+    cargo build --release -p guardian-service -p guardian-tray -p guardian-ui -p unstick-updater
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
@@ -33,7 +33,8 @@ New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 $Bins = @(
     "guardian-service.exe",
     "guardian-ui.exe",
-    "guardian-tray.exe"
+    "guardian-tray.exe",
+    "unstick-updater.exe"
 )
 foreach ($b in $Bins) {
     $src = Join-Path $Root "target\release\$b"
@@ -96,6 +97,7 @@ foreach ($d in $Docs) {
 Copy-Item -Force (Join-Path $Root "scripts\Install-Autostart.ps1") $Dist -ErrorAction SilentlyContinue
 Copy-Item -Force (Join-Path $Root "scripts\Uninstall-Autostart.ps1") $Dist -ErrorAction SilentlyContinue
 $releaseNotes = @(
+    "docs\RELEASE-v0.8.0.md",
     "docs\RELEASE-v0.7.0.md",
     "docs\RELEASE-v0.6.0.md",
     "docs\RELEASE-v0.5.0.md",
@@ -123,7 +125,7 @@ Public Latest releases require: pwsh -File scripts/Package-Portable.ps1 -Sign
 }
 
 # Versioned zip next to dist/ (workspace.package.version)
-$Ver = "0.7.0"
+$Ver = "0.8.0"
 $cargoToml = Get-Content (Join-Path $Root "Cargo.toml") -Raw
 if ($cargoToml -match '(?m)^version\s*=\s*"([^"]+)"') {
     $Ver = $Matches[1]
@@ -133,8 +135,19 @@ $ZipPath = Join-Path $Root $ZipName
 if (Test-Path $ZipPath) { Remove-Item -Force $ZipPath }
 Compress-Archive -Path (Join-Path $Dist "*") -DestinationPath $ZipPath -CompressionLevel Optimal
 
+# SHA256SUMS beside zip (also copied into dist for local reference)
+$hash = (Get-FileHash -Algorithm SHA256 -Path $ZipPath).Hash.ToLowerInvariant()
+$sumsLine = "$hash  $ZipName"
+$sumsPath = Join-Path $Root "SHA256SUMS"
+$sumsLine | Set-Content -Path $sumsPath -Encoding ascii
+$sumsLine | Set-Content -Path (Join-Path $Dist "SHA256SUMS") -Encoding ascii
+# Companion digest file for releases that prefer *.sha256 naming
+"$hash  $ZipName" | Set-Content -Path "$ZipPath.sha256" -Encoding ascii
+
 Write-Host "Portable package ready: $Dist"
 Write-Host "Zip: $ZipPath"
+Write-Host "SHA256SUMS: $sumsPath"
 Write-Host ("Signed: {0}" -f $signed)
 Get-ChildItem $Dist | Format-Table Name, Length -AutoSize
 Get-Item $ZipPath | Format-Table Name, Length -AutoSize
+Get-Content $sumsPath

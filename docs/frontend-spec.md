@@ -74,8 +74,10 @@ Contents:
 2. Mode: **Soft only** (default); **Last-resort pause** only if `experimental_suspend`
 3. Suspended count chip (rarely non-zero on Soft-only path)
 4. Safety / recovered / elevation banners (only when non-empty)
-5. **Hardware control** readout: envelope calibrated/learning, `u_disk` / `u_mem`, setpoint band, mode + intensity; session actions line; **Profile · Dev | Gaming | Quiet** (`SetProfile`); **Tools** Export / Import config + Prove Soft (90s)
+5. **Hardware control** readout: envelope calibrated/learning, `u_disk` / `u_mem`, setpoint band, mode + intensity; session actions line; **Profile · Dev | Gaming | Quiet** (`SetProfile`); **Tools** Export / Import config + Prove Soft (90s); **Updates** Check for updates / Install (GitHub Latest + SHA256 + `unstick-updater`)
 6. **Advanced thresholds ▸** (collapsed): Soft/Hard disk Active Time % and RAM available % sliders + Apply + presets
+
+Brand row may show an amber **Update vX.Y.Z** hint when `update_available` is set. Install always requires confirm (no silent replace).
 
 Hero also shows **Focus · app.exe** when the service reports a foreground process (LIVE only).
 

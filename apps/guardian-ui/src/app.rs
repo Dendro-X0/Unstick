@@ -61,6 +61,8 @@ pub struct UnstickApp {
     advanced_open: bool,
     /// One-shot auto-expand when Disk Lock / suspend needs attention.
     controls_auto_armed: bool,
+    /// Confirm dialog before StartUpdate.
+    update_confirm_open: bool,
 }
 
 const GAUGE_SEGMENTS: f32 = 15.0;
@@ -191,6 +193,7 @@ impl UnstickApp {
             controls_open: false,
             advanced_open: false,
             controls_auto_armed: false,
+            update_confirm_open: false,
         };
         app.disk_soft_edit = app.config.disk_busy_soft_pct;
         app.disk_hard_edit = app.config.disk_busy_hard_pct;
@@ -295,6 +298,19 @@ impl eframe::App for UnstickApp {
                             .color(TEXT_DIM)
                             .monospace(),
                     );
+                    if status.as_ref().is_some_and(|s| s.update_available) {
+                        ui.add_space(8.0);
+                        let uv = status
+                            .as_ref()
+                            .map(|s| s.update_version.as_str())
+                            .unwrap_or("?");
+                        ui.label(
+                            egui::RichText::new(format!("Update v{uv}"))
+                                .size(11.0)
+                                .color(theme::AMBER)
+                                .strong(),
+                        );
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         widgets::live_badge(ui, online);
                     });
@@ -400,6 +416,49 @@ impl eframe::App for UnstickApp {
                     Tab::Protect => self.ui_protect(ui, status.as_ref()),
                 }
             });
+
+        if self.update_confirm_open {
+            let ver = status
+                .as_ref()
+                .map(|s| s.update_version.clone())
+                .unwrap_or_default();
+            let unsigned = status
+                .as_ref()
+                .map(|s| s.update_unsigned_warning)
+                .unwrap_or(true);
+            egui::Window::new("Install update")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(format!(
+                        "Download and install Unstick v{ver}? Service and UI will restart. Config in AppData is kept."
+                    ));
+                    if unsigned {
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new(
+                                "Builds are unsigned until Authenticode is available — SmartScreen may warn.",
+                            )
+                            .size(12.0)
+                            .color(theme::AMBER),
+                        );
+                    }
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Cancel").clicked() {
+                            self.update_confirm_open = false;
+                        }
+                        if ui
+                            .button(egui::RichText::new("Install").color(TEAL))
+                            .clicked()
+                        {
+                            self.update_confirm_open = false;
+                            let _ = self.cmd_tx.send(ClientRequest::StartUpdate);
+                        }
+                    });
+                });
+        }
     }
 }
 
@@ -1012,6 +1071,62 @@ impl UnstickApp {
                                 let _ = self.cmd_tx.send(ClientRequest::StartProveDiskHog);
                             }
                         });
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new("Updates")
+                                .size(12.0)
+                                .strong()
+                                .color(TEXT_DIM),
+                        );
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            if ui
+                                .small_button(egui::RichText::new("Check for updates").size(12.0))
+                                .on_hover_text("Query GitHub Latest for Dendro-X0/Unstick")
+                                .clicked()
+                            {
+                                let _ = self.cmd_tx.send(ClientRequest::CheckForUpdate);
+                            }
+                            if s.update_available {
+                                if ui
+                                    .small_button(
+                                        egui::RichText::new(format!("Install v{}", s.update_version))
+                                            .size(12.0)
+                                            .color(TEAL),
+                                    )
+                                    .on_hover_text(
+                                        "Download zip, verify SHA256, stop service, replace EXEs, restart. AppData kept.",
+                                    )
+                                    .clicked()
+                                {
+                                    self.update_confirm_open = true;
+                                }
+                                if !s.update_notes_url.is_empty()
+                                    && ui
+                                        .small_button(egui::RichText::new("Release notes").size(12.0))
+                                        .clicked()
+                                {
+                                    let _ = open::that(&s.update_notes_url);
+                                }
+                            }
+                        });
+                        if !s.update_error.is_empty() {
+                            ui.label(
+                                egui::RichText::new(&s.update_error)
+                                    .size(11.0)
+                                    .color(CORAL),
+                            );
+                        } else if s.update_available {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Latest v{} · state {}",
+                                    s.update_version,
+                                    s.update_state.as_str()
+                                ))
+                                .size(11.0)
+                                .color(TEXT_DIM),
+                            );
+                        }
                     } else {
                         ui.label(theme::dim("Waiting for service status…"));
                     }

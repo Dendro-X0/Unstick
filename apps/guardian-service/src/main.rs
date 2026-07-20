@@ -7,6 +7,7 @@
 
 mod ipc_server;
 mod runtime;
+mod update_ops;
 
 use std::fs;
 

@@ -8,15 +8,17 @@ members = [
     "apps/guardian-service",
     "apps/guardian-tray",
     "apps/guardian-ui",
+    "apps/unstick-updater",
 ]
 default-members = [
     "apps/guardian-service",
     "apps/guardian-tray",
     "apps/guardian-ui",
+    "apps/unstick-updater",
 ]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 license = "MIT"
 authors = ["Dendro-X0"]

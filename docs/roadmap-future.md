@@ -1,12 +1,12 @@
 # Unstick — future roadmap (after v0.5.0)
 
-**Current Latest:** [v0.7.0](RELEASE-v0.7.0.md) (unsigned portable)  
+**Current Latest:** [v0.8.0](RELEASE-v0.8.0.md) (unsigned portable)  
 **North-star:** [hardware-control-north-star.md](../specs/backend/hardware-control-north-star.md)  
 **Living index:** [roadmap-next-release.md](roadmap-next-release.md)
 
 ```
-HANDOFF ATOMIC STEP: none — forward after 0.7.0; next Authenticode or v1.0 gates
-PAUSED / CANCELLED:    Suspend-as-primary; overclocking; standby purge; DPC “fixes”; other-OS; damage claims; zero-stutter claims
+HANDOFF ATOMIC STEP: none — forward after 0.8.0; next Authenticode or v1.0 gates
+PAUSED / CANCELLED:    Suspend-as-primary; overclocking; standby purge; DPC “fixes”; other-OS; damage claims; zero-stutter claims; silent auto-replace
 CANONICAL OWNER:       docs + product direction
 PROOF BEFORE DONE:     Each version names L1–L3 proof before “shipped”
 ```
@@ -29,8 +29,9 @@ flowchart LR
   v051[v0.5.1 Trust_proof]
   v06[v0.6.0 Control_depth]
   v07[v0.7.0 UX_ops]
+  v08[v0.8.0 Updates]
   v10[v1.0.0 Public_stable]
-  v05 --> v051 --> v06 --> v07 --> v10
+  v05 --> v051 --> v06 --> v07 --> v08 --> v10
 ```
 
 ---
@@ -86,6 +87,23 @@ flowchart LR
 
 ---
 
+## v0.8.0 — In-app updates (ops trust)
+
+**Detail:** [roadmap-v0.8.0.md](roadmap-v0.8.0.md) · **Design:** [in-app-update-design.md](../specs/backend/in-app-update-design.md)
+
+**Goal:** Check GitHub Latest and install the portable zip in-app (user-confirmed).
+
+| Work | Why |
+|------|-----|
+| Semver + GitHub Latest client | Discover newer releases without a browser |
+| Download + SHA256 verify | Abort tampered/wrong assets |
+| `unstick-updater` stop/extract/restart | Windows cannot replace running EXEs in-place |
+| UI/tray CTA | Operator clarity without a second dashboard |
+
+**Avoid:** silent auto-replace; MSI; blocking apply on Authenticode (still parallel).
+
+---
+
 ## v1.0.0 — Public stable (definition of done)
 
 Ship **v1.0** only when all are true:
@@ -120,4 +138,4 @@ Prefer the **smallest** item that raises either:
 - **Control quality** (better soft demotion under real freeze cliffs), or  
 - **Operator clarity** (sensing vs capping already done — next is action history / profiles)
 
-Default next after 0.7.0: **Authenticode** when a cert exists, then **v1.0** gates (signed Latest + multi-machine soak + frozen claims); do not claim zero launch stutter.
+Default next after 0.8.0: **Authenticode** when a cert exists, then **v1.0** gates (signed Latest + multi-machine soak + frozen claims); do not claim zero launch stutter.

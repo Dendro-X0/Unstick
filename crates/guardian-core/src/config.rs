@@ -105,6 +105,12 @@ pub struct GuardianConfig {
     /// Last applied Guard profile (`dev` | `gaming` | `quiet`).
     #[serde(default = "crate::profiles::default_active_profile")]
     pub active_profile: String,
+    /// Periodic GitHub Latest check (default ON).
+    #[serde(default = "default_true")]
+    pub update_check_enabled: bool,
+    /// Seconds between background update checks while service runs.
+    #[serde(default = "default_update_check_interval_secs")]
+    pub update_check_interval_secs: u64,
     pub allow_paths: Vec<String>,
     /// User whitelist: never soft-throttle, suspend, or terminate matching processes.
     /// Entries match executable name (e.g. `steam.exe`) or path substring (e.g. `\steam\`).
@@ -170,6 +176,14 @@ fn default_mem_lock_streak() -> u32 {
 fn default_suspend_escalation_streak() -> u32 {
     3
 }
+fn default_update_check_interval_secs() -> u64 {
+    86_400
+}
+
+/// Staging directory for downloaded update zips.
+pub fn updates_dir() -> PathBuf {
+    config_dir().join("updates")
+}
 
 impl Default for GuardianConfig {
     fn default() -> Self {
@@ -202,6 +216,8 @@ impl Default for GuardianConfig {
             mem_lock_streak: 2,
             mem_lock_hard_requires_paging: true,
             active_profile: crate::profiles::default_active_profile(),
+            update_check_enabled: true,
+            update_check_interval_secs: 86_400,
             allow_paths: default_allow_paths(),
             whitelist: Vec::new(),
             protected_extra: Vec::new(),

@@ -88,6 +88,8 @@ pub struct ServiceInner {
     pub last_elev_denied_log: Option<Instant>,
     /// Soft / Suspend session aggregates since process start (v0.7).
     pub session_actions: SessionActionCounters,
+    /// In-app update check / apply state (v0.8).
+    pub update: crate::update_ops::UpdateRuntime,
 }
 
 impl ServiceInner {
@@ -128,6 +130,7 @@ impl ServiceInner {
             last_status_write: None,
             last_elev_denied_log: None,
             session_actions: SessionActionCounters::default(),
+            update: crate::update_ops::UpdateRuntime::new(),
         })
     }
 
@@ -444,6 +447,120 @@ impl ServiceInner {
                 }
                 Err(message) => ServerPush::Error { message },
             },
+            ClientRequest::CheckForUpdate => {
+                let enabled = self.cfg.read().await.update_check_enabled;
+                // Serialize update work off the IPC task via blocking pool.
+                let mut rt = std::mem::take(&mut self.update);
+                let result = tokio::task::spawn_blocking(move || {
+                    let r = crate::update_ops::check_for_update(&mut rt, enabled);
+                    (rt, r)
+                })
+                .await;
+                match result {
+                    Ok((rt, Ok(msg))) => {
+                        self.update = rt;
+                        self.push_event(GuardianEvent::Info {
+                            message: msg.clone(),
+                            at: Utc::now(),
+                        });
+                        self.refresh_status_update_fields();
+                        ServerPush::Ok { message: msg }
+                    }
+                    Ok((rt, Err(message))) => {
+                        self.update = rt;
+                        if self.update.state != guardian_core::UpdateState::Error {
+                            self.update.set_error(message.clone());
+                        }
+                        self.refresh_status_update_fields();
+                        ServerPush::Error { message }
+                    }
+                    Err(e) => ServerPush::Error {
+                        message: format!("update check join: {e}"),
+                    },
+                }
+            }
+            ClientRequest::StartUpdate => {
+                if !self.update.available || self.update.pending.is_none() {
+                    return ServerPush::Error {
+                        message: "no update available — Check for updates first".into(),
+                    };
+                }
+                let soft = self.throttle.restore_all();
+                let sample = self.last_sample.clone();
+                self.note_soft_restores(&soft, sample.as_ref());
+
+                let mut rt = std::mem::take(&mut self.update);
+                let result = tokio::task::spawn_blocking(move || {
+                    match crate::update_ops::download_and_verify(&mut rt) {
+                        Ok(zip) => {
+                            let install_dir = match crate::update_ops::install_dir_from_service_exe()
+                            {
+                                Ok(d) => d,
+                                Err(e) => {
+                                    rt.set_error(e.clone());
+                                    return (rt, Err(e));
+                                }
+                            };
+                            let restart_tray = process_image_running("guardian-tray");
+                            rt.state = guardian_core::UpdateState::Applying;
+                            if let Err(e) = crate::update_ops::spawn_updater(
+                                &install_dir,
+                                &zip,
+                                true,
+                                restart_tray,
+                            ) {
+                                rt.set_error(e.clone());
+                                return (rt, Err(e));
+                            }
+                            let msg = "applying update — restarting".to_string();
+                            (rt, Ok(msg))
+                        }
+                        Err(e) => {
+                            rt.set_error(e.clone());
+                            (rt, Err(e))
+                        }
+                    }
+                })
+                .await;
+                match result {
+                    Ok((rt, Ok(msg))) => {
+                        self.update = rt;
+                        self.push_event(GuardianEvent::Info {
+                            message: msg.clone(),
+                            at: Utc::now(),
+                        });
+                        self.refresh_status_update_fields();
+                        tokio::spawn(async {
+                            tokio::time::sleep(Duration::from_millis(400)).await;
+                            std::process::exit(0);
+                        });
+                        ServerPush::Ok { message: msg }
+                    }
+                    Ok((rt, Err(message))) => {
+                        self.update = rt;
+                        self.refresh_status_update_fields();
+                        ServerPush::Error { message }
+                    }
+                    Err(e) => {
+                        let message = format!("update apply join: {e}");
+                        self.update.set_error(message.clone());
+                        self.refresh_status_update_fields();
+                        ServerPush::Error { message }
+                    }
+                }
+            }
+        }
+    }
+
+    fn refresh_status_update_fields(&mut self) {
+        if let Some(s) = &mut self.last_status {
+            s.update_check_enabled = true; // overwritten on next sample from cfg
+            s.update_available = self.update.available;
+            s.update_version = self.update.version.clone();
+            s.update_notes_url = self.update.notes_url.clone();
+            s.update_state = self.update.state;
+            s.update_error = self.update.error.clone();
+            s.update_unsigned_warning = self.update.unsigned_warning;
         }
     }
 
@@ -501,6 +618,31 @@ fn append_event_log(ev: &GuardianEvent) {
         if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
             let _ = writeln!(f, "{raw}");
         }
+    }
+}
+
+fn process_image_running(stem: &str) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let filter = format!("IMAGENAME eq {stem}.exe");
+        let out = std::process::Command::new("tasklist")
+            .args(["/FI", &filter, "/NH"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        match out {
+            Ok(o) => {
+                let s = String::from_utf8_lossy(&o.stdout).to_ascii_lowercase();
+                s.contains(&format!("{stem}.exe").to_ascii_lowercase())
+            }
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = stem;
+        false
     }
 }
 
@@ -580,6 +722,40 @@ async fn sample_loop(state: Arc<Mutex<ServiceInner>>) -> Result<()> {
             let mut g = state.lock().await;
             tick(&mut g).await?
         };
+
+        // Background Latest check (daily by default) — skip while applying/downloading.
+        {
+            let mut g = state.lock().await;
+            let cfg = g.cfg.read().await;
+            let enabled = cfg.update_check_enabled;
+            let interval = Duration::from_secs(cfg.update_check_interval_secs.max(60));
+            drop(cfg);
+            let due = enabled
+                && !matches!(
+                    g.update.state,
+                    guardian_core::UpdateState::Checking
+                        | guardian_core::UpdateState::Downloading
+                        | guardian_core::UpdateState::Applying
+                )
+                && g
+                    .update
+                    .last_check
+                    .map(|t| t.elapsed() >= interval)
+                    .unwrap_or(true);
+            if due {
+                let mut rt = std::mem::take(&mut g.update);
+                drop(g);
+                let rt = tokio::task::spawn_blocking(move || {
+                    let _ = crate::update_ops::check_for_update(&mut rt, enabled);
+                    rt
+                })
+                .await
+                .unwrap_or_else(|_| crate::update_ops::UpdateRuntime::new());
+                let mut g = state.lock().await;
+                g.update = rt;
+            }
+        }
+
         tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
     }
 }
@@ -1081,6 +1257,13 @@ async fn tick(g: &mut ServiceInner) -> Result<u64> {
         session_suspended: g.session_actions.suspended,
         session_resumed: g.session_actions.resumed,
         active_profile: cfg.active_profile.clone(),
+        update_check_enabled: cfg.update_check_enabled,
+        update_available: g.update.available,
+        update_version: g.update.version.clone(),
+        update_notes_url: g.update.notes_url.clone(),
+        update_state: g.update.state,
+        update_error: g.update.error.clone(),
+        update_unsigned_warning: g.update.unsigned_warning,
     };
 
     // Compact JSON; throttle disk write on Normal (IPC always uses last_status).
